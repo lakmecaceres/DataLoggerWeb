@@ -422,7 +422,8 @@ class DataLogger:
                 cell.fill = self.black_fill
 
         # Apply black fill to tissue_name_old
-        tissue_old_col = headers.index('tissue_name_old') + 1        worksheet.cell(row=current_row, column=tissue_old_col).fill = self.black_fill
+        tissue_old_col = headers.index('tissue_name_old') + 1
+        worksheet.cell(row=current_row, column=tissue_old_col).fill = self.black_fill
 
 
 # Create global instance
