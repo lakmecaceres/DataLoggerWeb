@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Krienen Lab Data Logger</title>
+
+    <!-- DNA Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧬</text></svg>">
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .counter-badge {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #0078d7;
+            color: white;
+            border: none;
+            border-radius: 20px;
+            padding: 8px 16px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .counter-badge:hover {
+            background: #106ebe;
+            transform: scale(1.05);
+        }
+
+        .counter-badge:active {
+            transform: scale(0.95);
+        }
+
+        .header {
+            background-color: #0078d7;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+
+        .header p {
+            margin: 5px 0 0 0;
+            font-size: 12px;
+            opacity: 0.9;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #ddd;
+            margin-bottom: 15px;
+        }
+
+        .tab {
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            border-bottom: none;
+            padding: 8px 16px;
+            cursor: pointer;
+            border-radius: 6px 6px 0 0;
+            margin-right: 2px;
+            font-weight: 500;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .tab:hover {
+            background-color: #e9ecef;
+        }
+
+        .tab.active {
+            background-color: #0078d7;
+            color: white;
+            border-color: #0078d7;
+        }
+
+        .tab-content {
+            display: none;
+            padding: 15px 0;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 12px;
+            padding: 5px 0;
+        }
+
+        label {
+            font-weight: 500;
+            color: #333;
+            font-size: 14px;
+        }
+
+        input, select, textarea {
+            padding: 6px 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #0078d7;
+            box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.2);
+        }
+
+        .save-controls {
+            text-align: center;
+            margin: 15px 0;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #e9ecef;
+        }
+
+        .save-btn {
+            margin: 0 5px;
+            padding: 6px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+
+        .save-btn:hover {
+            background: #e9ecef;
+        }
+
+        .save-status {
+            margin-left: 10px;
+            font-size: 11px;
+            color: #666;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+        }
+
+        .submit-btn, .download-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        .submit-btn {
+            background-color: #0078d7;
+            color: white;
+        }
+
+        .submit-btn:hover {
+            background-color: #106ebe;
+        }
+
+        .submit-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .download-btn {
+            background-color: #107c10;
+            color: white;
+        }
+
+        .download-btn:hover {
+            background-color: #0e6b0e;
+        }
+
+        .paste-btn {
+            background-color: #0078d7;
+            color: white;
+            border: none;
+            padding: 6px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 8px;
+            transition: background-color 0.3s ease;
+        }
+
+        .paste-btn:hover {
+            background-color: #106ebe;
+        }
+
+        .paste-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .elab-group {
+            display: flex;
+            align-items: center;
+        }
+
+        .elab-group input {
+            flex: 1;
+        }
+
+        .elab-editable {
+            background-color: #fff3cd !important;
+            border-color: #ffc107 !important;
+        }
+
+        /* Error styling */
+        .error-field {
+            border: 2px solid #d32f2f !important;
+            background-color: #ffebee !important;
+            box-shadow: 0 0 5px rgba(211, 47, 47, 0.3);
+        }
+
+        .error-message {
+            color: #d32f2f;
+            font-size: 11px;
+            margin-top: 2px;
+            display: block;
+            grid-column: 2;
+        }
+
+        .success-field {
+            border: 2px solid #388e3c !important;
+            background-color: #e8f5e8 !important;
+        }
+
+        .error-summary {
+            background-color: #ffebee;
+            border: 1px solid #d32f2f;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            color: #d32f2f;
+            font-size: 14px;
+        }
+
+        .validation-info {
+            background-color: #e3f2fd;
+            border: 1px solid #2196f3;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            color: #1976d2;
+            font-size: 12px;
+        }
+
+        @media (max-width: 768px) {
+            .form-row {
+                grid-template-columns: 1fr;
+                gap: 5px;
+            }
+
+            label {
+                font-weight: bold;
+            }
+
+            .tabs {
+                flex-wrap: wrap;
+            }
+
+            .tab {
+                flex: 1;
+                min-width: 100px;
+                text-align: center;
+                margin-bottom: 2px;
+            }
+
+            .button-group {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .counter-badge {
+                top: 10px;
+                right: 10px;
+                font-size: 14px;
+                padding: 6px 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Counter Badge -->
+    <button id="counter-badge" class="counter-badge" onclick="editCounter()">
+        104
+    </button>
+
+    <div class="header">
+        <h1>Krienen Lab Data Logger</h1>
+    </div>
+
+    <div class="container">
+        <!-- Auto-save controls -->
+        <div class="save-controls">
+            <button type="button" onclick="saveFormData()" class="save-btn">💾 Save Progress</button>
+            <button type="button" onclick="loadFormData()" class="save-btn">📁 Load Saved</button>
+            <button type="button" onclick="clearSavedData()" class="save-btn">🗑️ Clear Saved</button>
+            <span id="save-status" class="save-status">Auto-save enabled</span>
+        </div>
+
+        <form id="dataForm">
+            <div class="tabs">
+                <div class="tab active" onclick="showTab('tissue')">Tissue</div>
+                <div class="tab" onclick="showTab('facs')">FACS</div>
+                <div class="tab" onclick="showTab('cdna')">cDNA</div>
+                <div class="tab" onclick="showTab('libraries')">Libraries</div>
+            </div>
+
+            <!-- Tissue Tab -->
+            <div id="tissue" class="tab-content active">
+                <div class="form-row">
+                    <label for="project">Project:</label>
+                    <select name="project" id="project" onchange="toggleProjectName()">
+                        <option value="HMBA_CjAtlas_Subcortex">HMBA_CjAtlas_Subcortex</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+
+                <div class="form-row" id="project-name-row" style="display: none;">
+                    <label for="project_name">Project Name:</label>
+                    <input type="text" name="project_name" id="project_name">
+                </div>
+
+                <div class="form-row">
+                    <label for="experiment_date">Experiment Date:</label>
+                    <input type="text" name="experiment_date" id="experiment_date" placeholder="YYMMDD or MM/DD/YY" required>
+                </div>
+
+                <div class="form-row">
+                    <label for="marmoset_name">Marmoset Name:</label>
+                    <select name="marmoset_name" id="marmoset_name" required>
+                        <option value="">Select Marmoset</option>
+                        <option value="Croissant">Croissant</option>
+                        <option value="Nutmeg">Nutmeg</option>
+                        <option value="Jellybean">Jellybean</option>
+                        <option value="Rambo">Rambo</option>
+                        <option value="Morel">Morel</option>
+                    </select>
+                </div>
+
+                <div class="form-row">
+                    <label for="hemisphere">Hemisphere:</label>
+                    <select name="hemisphere" id="hemisphere" required>
+                        <option value="">Select Hemisphere</option>
+                        <option value="Left (LH)">Left (LH)</option>
+                        <option value="Right (RH)">Right (RH)</option>
+                        <option value="Both">Both</option>
+                    </select>
+                </div>
+
+                <div class="form-row">
+                    <label for="tile_location">Tile Location:</label>
+                    <select name="tile_location" id="tile_location" required>
+                        <option value="">Select Location</option>
+                        <option value="BS">BS</option>
+                        <option value="CX">CX</option>
+                        <option value="CB">CB</option>
+                    </select>
+                </div>
+
+                <div class="form-row">
+                    <label for="slab_number">Slab Number:</label>
+                    <input type="number" name="slab_number" id="slab_number" placeholder="Enter numeric value" required>
+                </div>
+
+                <div class="form-row">
+                    <label for="tile_number">Tile Number:</label>
+                    <input type="text" name="tile_number" id="tile_number" placeholder="Enter numeric or alphanumeric value" required>
+                </div>
+
+                <div class="form-row">
+                    <label for="elab_link">eLab Link:</label>
+                    <div class="elab-group">
+                        <input type="url" name="elab_link" id="elab_link" placeholder="eLab link will appear here">
+                        <button type="button" class="paste-btn" onclick="pasteElabLink()">📋 Paste</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- FACS Tab -->
+            <div id="facs" class="tab-content">
+                <div class="form-row">
+                    <label for="sorter_initials">Sorter Initials:</label>
+                    <input type="text" name="sorter_initials" id="sorter_initials" placeholder="Enter sorter's initials" required>
+                </div>
+
+                <div class="form-row">
+                    <label for="sort_method">Sort Method:</label>
+                    <select name="sort_method" id="sort_method" onchange="updateFacsPopulation()" required>
+                        <option value="">Select Method</option>
+                        <option value="pooled">pooled</option>
+                        <option value="unsorted">unsorted</option>
+                        <option value="DAPI">DAPI</option>
+                    </select>
+                </div>
+
+                <div class="form-row">
+                    <label for="facs_population">FACS Population:</label>
+                    <input type="text" name="facs_population" id="facs_population" placeholder="Format: XX/XX/XX (e.g., 70/20/10)">
+                </div>
+
+                <div class="form-row">
+                    <label for="rxn_number">Number of Reactions:</label>
+                    <input type="number" name="rxn_number" id="rxn_number" placeholder="Enter number of reactions" required>
+                </div>
+
+                <div class="form-row">
+                    <label for="expected_recovery">Expected Recovery:</label>
+                    <input type="number" name="expected_recovery" id="expected_recovery" placeholder="Enter expected recovery">
+                </div>
+
+                <div class="form-row">
+                    <label for="nuclei_concentration">Nuclei Concentration:</label>
+                    <input type="number" step="0.01" name="nuclei_concentration" id="nuclei_concentration" placeholder="Enter concentration">
+                </div>
+
+                <div class="form-row">
+                    <label for="nuclei_volume">Nuclei Volume (µL):</label>
+                    <input type="number" step="0.01" name="nuclei_volume" id="nuclei_volume" placeholder="Enter volume">
+                </div>
+            </div>
+
+            <!-- cDNA Tab -->
+            <div id="cdna" class="tab-content">
+                <div class="form-row">
+                    <label for="atac_prep_date">ATAC Library Prep Date:</label>
+                    <input type="text" name="atac_prep_date" id="atac_prep_date" placeholder="YYMMDD or MM/DD/YY">
+                </div>
+
+                <div class="form-row">
+                    <label for="cdna_amp_date">cDNA Amplification Date:</label>
+                    <input type="text" name="cdna_amp_date" id="cdna_amp_date" placeholder="YYMMDD or MM/DD/YY">
+                </div>
+
+                <div class="form-row">
+                    <label for="rna_prep_date">cDNA Library Prep Date:</label>
+                    <input type="text" name="rna_prep_date" id="rna_prep_date" placeholder="YYMMDD or MM/DD/YY">
+                </div>
+
+                <div class="form-row">
+                    <label for="cdna_pcr_cycles">cDNA PCR Cycles:</label>
+                    <input type="text" name="cdna_pcr_cycles" id="cdna_pcr_cycles" placeholder="Comma-separated values">
+                </div>
+
+                <div class="form-row">
+                    <label for="cdna_concentration">cDNA Concentration:</label>
+                    <input type="text" name="cdna_concentration" id="cdna_concentration" placeholder="Comma-separated values (ng/µL)">
+                </div>
+
+                <div class="form-row">
+                    <label for="percent_cdna_400bp">Percent cDNA > 400bp:</label>
+                    <input type="text" name="percent_cdna_400bp" id="percent_cdna_400bp" placeholder="Comma-separated values">
+                </div>
+            </div>
+
+            <!-- Libraries Tab -->
+            <div id="libraries" class="tab-content">
+                <div class="form-row">
+                    <label for="atac_indices">ATAC Indices:</label>
+                    <input type="text" name="atac_indices" id="atac_indices" placeholder="Comma-separated values (e.g., D4,E5,F6)">
+                </div>
+
+                <div class="form-row">
+                    <label for="library_cycles_atac">ATAC Library Cycles:</label>
+                    <input type="text" name="library_cycles_atac" id="library_cycles_atac" placeholder="Comma-separated values">
+                </div>
+
+                <div class="form-row">
+                    <label for="atac_lib_concentration">ATAC Library Concentration:</label>
+                    <input type="text" name="atac_lib_concentration" id="atac_lib_concentration" placeholder="Comma-separated values (ng/µL)">
+                </div>
+
+                <div class="form-row">
+                    <label for="atac_sizes">ATAC Library Sizes (bp):</label>
+                    <input type="text" name="atac_sizes" id="atac_sizes" placeholder="Comma-separated values">
+                </div>
+
+                <div class="form-row">
+                    <label for="rna_indices">cDNA Indices:</label>
+                    <input type="text" name="rna_indices" id="rna_indices" placeholder="Comma-separated values (e.g., A1,B2,C3)">
+                </div>
+
+                <div class="form-row">
+                    <label for="library_cycles_rna">cDNA Library Cycles:</label>
+                    <input type="text" name="library_cycles_rna" id="library_cycles_rna" placeholder="Comma-separated values">
+                </div>
+
+                <div class="form-row">
+                    <label for="rna_lib_concentration">cDNA Library Concentration:</label>
+                    <input type="text" name="rna_lib_concentration" id="rna_lib_concentration" placeholder="Comma-separated values (ng/µL)">
+                </div>
+
+                <div class="form-row">
+                    <label for="rna_sizes">cDNA Library Sizes (bp):</label>
+                    <input type="text" name="rna_sizes" id="rna_sizes" placeholder="Comma-separated values">
+                </div>
+            </div>
+
+            <div class="button-group">
+                <button type="submit" class="submit-btn">📊 Submit Data</button>
+                <button type="button" class="download-btn" onclick="downloadExcel()">📥 Download Excel</button>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        // Tab functionality
+        function showTab(tabName) {
+            const tabContents = document.querySelectorAll('.tab-content');
+            tabContents.forEach(content => content.classList.remove('active'));
+
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => tab.classList.remove('active'));
+
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        // Project name toggle
+        function toggleProjectName() {
+            const projectSelect = document.getElementById('project');
+            const projectNameRow = document.getElementById('project-name-row');
+
+            if (projectSelect.value === 'Other') {
+                projectNameRow.style.display = 'grid';
+                document.getElementById('project_name').required = true;
+            } else {
+                projectNameRow.style.display = 'none';
+                document.getElementById('project_name').required = false;
+            }
+        }
+
+        // FACS population update
+        function updateFacsPopulation() {
+            const sortMethod = document.getElementById('sort_method').value;
+            const facsPopulation = document.getElementById('facs_population');
+
+            if (sortMethod === 'pooled') {
+                facsPopulation.disabled = false;
+                facsPopulation.placeholder = 'Format: XX/XX/XX (e.g., 70/20/10)';
+                facsPopulation.value = '';
+            } else if (sortMethod === 'unsorted') {
+                facsPopulation.disabled = true;
+                facsPopulation.value = 'no_FACS';
+            } else if (sortMethod === 'DAPI') {
+                facsPopulation.disabled = true;
+                facsPopulation.value = 'DAPI';
+            }
+
+            // Save data after updating FACS population
+            saveFormData();
+        }
+
+        // Counter badge functions
+        function loadCounterBadge() {
+            fetch('/get_counter')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('counter-badge').textContent = data.next_counter || '90';
+                })
+                .catch(error => {
+                    console.error('Error loading counter:', error);
+                    document.getElementById('counter-badge').textContent = '?';
+                });
+        }
+
+        function editCounter() {
+            const currentCounter = document.getElementById('counter-badge').textContent;
+            const newCounter = prompt(`Current P-counter: ${currentCounter}\n\nEnter new counter value:`, currentCounter);
+
+            if (newCounter === null) return; // User cancelled
+
+            const counterNum = parseInt(newCounter);
+            if (isNaN(counterNum) || counterNum < 0) {
+                alert('Please enter a valid positive number.');
+                return;
+            }
+
+            if (!confirm(`Change P-counter from ${currentCounter} to ${counterNum}?`)) {
+                return;
+            }
+
+            // Update the badge immediately for feedback
+            document.getElementById('counter-badge').textContent = '...';
+
+            fetch('/update_counter', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ new_counter: counterNum })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('counter-badge').textContent = counterNum;
+
+                    // Brief success animation
+                    const badge = document.getElementById('counter-badge');
+                    badge.style.background = '#107c10';
+                    setTimeout(() => {
+                        badge.style.background = '#0078d7';
+                    }, 1000);
+                } else {
+                    alert('Error updating counter: ' + data.error);
+                    loadCounterBadge(); // Reload original value
+                }
+            })
+            .catch(error => {
+                console.error('Error updating counter:', error);
+                alert('Error updating counter. Please try again.');
+                loadCounterBadge(); // Reload original value
+            });
+        }
+
+        // eLab link paste functionality with improved editing
+        async function pasteElabLink() {
+            const button = document.querySelector('.paste-btn');
+            const input = document.getElementById('elab_link');
+
+            try {
+                button.textContent = '⏳';
+                button.disabled = true;
+
+                const text = await navigator.clipboard.readText();
+                input.value = text.trim();
+
+                // Make it editable after pasting
+                input.readOnly = false;
+                input.classList.add('elab-editable');
+
+                button.textContent = '✅';
+                button.style.backgroundColor = '#107c10';
+
+                // Save data after pasting
+                saveFormData();
+
+                setTimeout(() => {
+                    button.textContent = '📋 Paste';
+                    button.style.backgroundColor = '#0078d7';
+                    button.disabled = false;
+                }, 2000);
+
+            } catch (err) {
+                button.textContent = '❌';
+                button.style.backgroundColor = '#d13438';
+
+                alert('Clipboard access denied. Please manually copy and paste the link into the field.');
+                input.readOnly = false;
+                input.classList.add('elab-editable');
+                input.placeholder = 'Manually paste your eLab link here';
+
+                setTimeout(() => {
+                    button.textContent = '📋 Paste';
+                    button.style.backgroundColor = '#0078d7';
+                    button.disabled = false;
+                }, 3000);
+            }
+        }
+
+        // Download Excel functionality
+        function downloadExcel() {
+            window.location.href = '/download';
+        }
+
+        // AUTO-SAVE FUNCTIONALITY
+        function saveFormData() {
+            const formData = {};
+            const inputs = document.querySelectorAll('input, select, textarea');
+
+            inputs.forEach(input => {
+                if (input.name) {
+                    formData[input.name] = input.value;
+                }
+            });
+
+            localStorage.setItem('krienen_form_data', JSON.stringify(formData));
+
+            // Update status
+            const status = document.getElementById('save-status');
+            status.textContent = 'Saved ' + new Date().toLocaleTimeString();
+            status.style.color = '#107c10';
+
+            setTimeout(() => {
+                status.textContent = 'Auto-save enabled';
+                status.style.color = '#666';
+            }, 2000);
+        }
+
+        function loadFormData() {
+            const savedData = localStorage.getItem('krienen_form_data');
+            if (savedData) {
+                const formData = JSON.parse(savedData);
+
+                Object.keys(formData).forEach(fieldName => {
+                    const field = document.querySelector(`[name="${fieldName}"]`);
+                    if (field && formData[fieldName]) {
+                        field.value = formData[fieldName];
+
+                        // Trigger change events for dropdowns
+                        if (field.tagName === 'SELECT') {
+                            field.dispatchEvent(new Event('change'));
+                        }
+
+                        // Make eLab link editable if it has a value
+                        if (fieldName === 'elab_link' && formData[fieldName]) {
+                            field.readOnly = false;
+                            field.classList.add('elab-editable');
+                        }
+                    }
+                });
+
+                const status = document.getElementById('save-status');
+                status.textContent = 'Data loaded from previous session';
+                status.style.color = '#0078d7';
+
+                setTimeout(() => {
+                    status.textContent = 'Auto-save enabled';
+                    status.style.color = '#666';
+                }, 3000);
+            } else {
+                const status = document.getElementById('save-status');
+                status.textContent = 'No saved data found';
+                status.style.color = '#d32f2f';
+
+                setTimeout(() => {
+                    status.textContent = 'Auto-save enabled';
+                    status.style.color = '#666';
+                }, 2000);
+            }
+        }
+
+        function clearSavedData() {
+            localStorage.removeItem('krienen_form_data');
+
+            const status = document.getElementById('save-status');
+            status.textContent = 'Saved data cleared';
+            status.style.color = '#d32f2f';
+
+            setTimeout(() => {
+                status.textContent = 'Auto-save enabled';
+                status.style.color = '#666';
+            }, 2000);
+        }
+
+        // FORM SUBMISSION WITH PROPER JSON
+        function validateForm(event) {
+            // ALWAYS prevent default form submission first
+            if (event) {
+                event.preventDefault();
+            }
+
+            console.log('Starting form validation...');
+
+            // Remove any existing error summaries
+            const existingSummary = document.querySelector('.error-summary');
+            if (existingSummary) existingSummary.remove();
+
+            // Clear all error styling
+            const allFields = document.querySelectorAll('input, select');
+            allFields.forEach(field => {
+                field.classList.remove('error-field', 'success-field');
+                const errorMsg = document.getElementById(`${field.name}-error`);
+                if (errorMsg) errorMsg.remove();
+            });
+
+            let hasErrors = false;
+            const errors = [];
+
+            // Only validate truly required fields
+            const criticalFields = [
+                {name: 'experiment_date', label: 'Experiment Date'},
+                {name: 'marmoset_name', label: 'Marmoset Name'},
+                {name: 'hemisphere', label: 'Hemisphere'},
+                {name: 'tile_location', label: 'Tile Location'},
+                {name: 'slab_number', label: 'Slab Number'},
+                {name: 'tile_number', label: 'Tile Number'},
+                {name: 'sorter_initials', label: 'Sorter Initials'},
+                {name: 'sort_method', label: 'Sort Method'},
+                {name: 'rxn_number', label: 'Number of Reactions'}
+            ];
+
+            criticalFields.forEach(fieldInfo => {
+                const field = document.querySelector(`[name="${fieldInfo.name}"]`);
+                if (field && !field.value.trim()) {
+                    hasErrors = true;
+                    errors.push(fieldInfo.label);
+                    field.classList.add('error-field');
+                    console.log(`Missing required field: ${fieldInfo.label}`);
+                }
+            });
+
+            if (hasErrors) {
+                console.log('Validation failed, showing errors:', errors);
+
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'error-summary';
+                errorDiv.innerHTML = `
+                    <strong>⚠️ Please fill in the following required fields:</strong>
+                    <ul>
+                        ${errors.map(error => `<li>${error}</li>`).join('')}
+                    </ul>
+                `;
+
+                const form = document.querySelector('form');
+                form.insertBefore(errorDiv, form.firstChild);
+
+                // Scroll to first error
+                const firstError = document.querySelector('.error-field');
+                if (firstError) {
+                    firstError.scrollIntoView({behavior: 'smooth', block: 'center'});
+                    firstError.focus();
+                }
+
+                return false;
+            }
+
+            console.log('Validation passed, submitting form...');
+
+            // Collect form data as JSON
+            const formData = {};
+            const inputs = document.querySelectorAll('input, select, textarea');
+            inputs.forEach(input => {
+                if (input.name) {
+                    // Map HTML field names to expected backend field names
+                    const fieldMapping = {
+                        'experiment_date': 'date',
+                        'marmoset_name': 'marmoset',
+                        'slab_number': 'slab',
+                        'tile_number': 'tile',
+                        'hemisphere': 'hemisphere',
+                        'tile_location': 'tile_location',
+                        'sort_method': 'sort_method',
+                        'rxn_number': 'rxn_number',
+                        'sorter_initials': 'sorter_initials',
+                        'facs_population': 'facs_population',
+                        'expected_recovery': 'expected_recovery',
+                        'nuclei_concentration': 'nuclei_concentration',
+                        'nuclei_volume': 'nuclei_volume',
+                        'project': 'project',
+                        'project_name': 'project_name',
+                        'elab_link': 'elab_link',
+                        'atac_prep_date': 'atac_prep_date',
+                        'cdna_amp_date': 'cdna_amp_date',
+                        'rna_prep_date': 'rna_prep_date',
+                        'cdna_pcr_cycles': 'cdna_pcr_cycles',
+                        'cdna_concentration': 'cdna_concentration',
+                        'percent_cdna_400bp': 'percent_cdna_400bp',
+                        'atac_indices': 'atac_indices',
+                        'library_cycles_atac': 'library_cycles_atac',
+                        'atac_lib_concentration': 'atac_lib_concentration',
+                        'atac_sizes': 'atac_sizes',
+                        'rna_indices': 'rna_indices',
+                        'library_cycles_rna': 'library_cycles_rna',
+                        'rna_lib_concentration': 'rna_lib_concentration',
+                        'rna_sizes': 'rna_sizes'
+                    };
+
+                    const backendFieldName = fieldMapping[input.name] || input.name;
+                    formData[backendFieldName] = input.value || '';
+                }
+            });
+
+            console.log('Sending form data:', formData);
+
+            // Show loading state
+            const submitBtn = document.querySelector('.submit-btn');
+            const originalText = submitBtn.textContent;
+            submitBtn.textContent = '⏳ Submitting...';
+            submitBtn.disabled = true;
+
+            // Send JSON data to backend
+            fetch('/submit', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify(formData)
+            })
+            .then(response => {
+                console.log('Response status:', response.status);
+                console.log('Response headers:', response.headers);
+                return response.json();
+            })
+            .then(data => {
+                console.log('Response data:', data);
+                if (data.success) {
+                    alert('✅ Data submitted successfully!');
+
+                    // Clear saved data on successful submit
+                    clearSavedData();
+
+                    // Optionally clear the form
+                    document.querySelector('form').reset();
+
+                } else {
+                    alert('❌ Error: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Fetch error:', error);
+                alert('❌ Network error occurred. Please try again.');
+            })
+            .finally(() => {
+                // Restore button state
+                submitBtn.textContent = originalText;
+                submitBtn.disabled = false;
+            });
+
+            return false; // Always prevent default form submission
+        }
+
+        // Initialize everything
+        document.addEventListener('DOMContentLoaded', function() {
+            // Load counter badge
+            loadCounterBadge();
+
+            // Load saved data on page load
+            loadFormData();
+
+            // Auto-save on every input change
+            const inputs = document.querySelectorAll('input, select, textarea');
+            inputs.forEach(input => {
+                input.addEventListener('input', saveFormData);
+                input.addEventListener('change', saveFormData);
+            });
+
+            // Properly bind form submission
+            const form = document.getElementById('dataForm');
+            form.addEventListener('submit', function(event) {
+                event.preventDefault(); // Always prevent default
+                validateForm(event);
+            });
+
+            // Allow manual editing of eLab link
+            const elabInput = document.getElementById('elab_link');
+
+            // Make editable on click
+            elabInput.addEventListener('click', function() {
+                this.readOnly = false;
+                this.classList.add('elab-editable');
+                this.placeholder = 'Enter or edit your eLab link here';
+            });
+
+            // Auto-save when editing
+            elabInput.addEventListener('input', function() {
+                saveFormData();
+            });
+        });
+    </script>
+</body>
+</html>
