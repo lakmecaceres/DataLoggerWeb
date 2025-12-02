@@ -146,22 +146,20 @@ class DataLogger:
 
         project = form_data.get('project', '')
 
-        # Process slab and hemisphere (Cortex vs others)
+        # Process slab and hemisphere
         raw_slab = form_data['slab'].strip()
         hemisphere = form_data['hemisphere'].split()[0].upper()
 
         if project == "HMBA_CjAtlas_Cortex":
-            # Allow comma-separated slabs, e.g. "9,10,11"
+            # Cortex: allow comma-separated slabs, e.g. "9,10,11"
             slab_list = [s.strip() for s in raw_slab.split(',') if s.strip()]
             if not slab_list:
                 raise ValueError("No valid slab numbers provided for HMBA_CjAtlas_Cortex")
-
-            # Combined label for identifier: "9_10_11"
             combined_slab_label = "_".join(slab_list)
-
-            # Use first slab (zero-padded) where single numeric slab is still needed
+            # Use first slab (zero-padded) where a single numeric slab is needed
             slab = slab_list[0].zfill(2)
         else:
+            # Subcortex + Aim 4 + Other: single slab only
             combined_slab_label = None
             slab = raw_slab
             if hemisphere == "RIGHT":
@@ -239,11 +237,13 @@ class DataLogger:
         dup_index_counter = {}
         headers = [cell.value for cell in worksheet[1]]
 
-        # Modalities depend on project
-        if project == "HMBA_CjAtlas_Cortex":
-            modalities = ["RNA"]  # Cortex: RNA only
+        # Modalities depend on project:
+        # - Aim 4: RNA only (no ATAC)
+        # - All others (Subcortex, Cortex, Other): RNA + ATAC
+        if project == "Aim 4":
+            modalities = ["RNA"]
         else:
-            modalities = ["RNA", "ATAC"]  # Default: RNA + ATAC
+            modalities = ["RNA", "ATAC"]
 
         for x in range(rxn_number):
             p_number, port_well = port_wells[x]
