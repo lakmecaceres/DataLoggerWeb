@@ -1,0 +1,30 @@
+# Use an official lightweight Python image.
+FROM python:3.11-slim
+
+# Create and change to the app directory.
+WORKDIR /app
+
+# Install system deps (optional but often needed for scientific libs).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirement list first (for better caching).
+# If you don't have requirements.txt yet, see below.
+COPY requirements.txt .
+
+# Install Python dependencies.
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application code.
+COPY . .
+
+# Cloud Run will set PORT; default to 8080 for local runs.
+ENV PORT=8080
+ENV PYTHONUNBUFFERED=1
+
+# Tell Flask to listen on all interfaces.
+ENV FLASK_APP=main.py
+
+# Command to run your app.
+CMD ["gunicorn", "-b", "0.0.0.0:8080", "main:app"]
