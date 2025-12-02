@@ -404,7 +404,7 @@
                 <div class="form-row">
                     <label for="slab_number">Slab Number:</label>
                     <input type="text" name="slab_number" id="slab_number"
-                           placeholder="Enter comma separated values if applicable" required>
+                           placeholder="Enter numeric or comma-separated values (e.g., 9,10,11)" required>
                 </div>
 
                 <div class="form-row">
@@ -560,10 +560,11 @@
             event.target.classList.add('active');
         }
 
-        // Project name toggle
+        // Project name toggle + slab behavior
         function toggleProjectName() {
             const projectSelect = document.getElementById('project');
             const projectNameRow = document.getElementById('project-name-row');
+            const slabInput = document.getElementById('slab_number');
 
             if (projectSelect.value === 'Other') {
                 projectNameRow.style.display = 'grid';
@@ -571,6 +572,18 @@
             } else {
                 projectNameRow.style.display = 'none';
                 document.getElementById('project_name').required = false;
+            }
+
+            // Enforce slab rules:
+            if (projectSelect.value === 'HMBA_CjAtlas_Cortex') {
+                // Allow comma-separated slabs
+                slabInput.placeholder = 'Enter numeric or comma-separated values (e.g., 9,10,11)';
+            } else {
+                // Subcortex / Aim 4 / Other: single slab only
+                if (slabInput.value.includes(',')) {
+                    slabInput.value = slabInput.value.split(',')[0].trim();
+                }
+                slabInput.placeholder = 'Enter a single numeric slab value';
             }
         }
 
@@ -968,6 +981,24 @@
                 input.addEventListener('change', saveFormData);
             });
 
+            // Enforce slab rules while typing
+            const projectSelect = document.getElementById('project');
+            const slabInput = document.getElementById('slab_number');
+
+            slabInput.addEventListener('input', function () {
+                const project = projectSelect.value;
+
+                if (project === 'HMBA_CjAtlas_Cortex') {
+                    // Allow commas; nothing special here
+                    return;
+                }
+
+                // For non-Cortex projects, strip commas and anything after
+                if (this.value.includes(',')) {
+                    this.value = this.value.split(',')[0].trim();
+                }
+            });
+
             // Properly bind form submission
             const form = document.getElementById('dataForm');
             form.addEventListener('submit', function(event) {
@@ -989,6 +1020,9 @@
             elabInput.addEventListener('input', function() {
                 saveFormData();
             });
+
+            // Ensure project-dependent UI (like slab placeholder) is correct on load
+            toggleProjectName();
         });
     </script>
 </body>
