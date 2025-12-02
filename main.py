@@ -132,11 +132,7 @@ class DataLogger:
         # Find the last row with content
         last_row_with_content = 1
         for row_idx in range(1, worksheet.max_row + 1):
-            row_has_content = False
-            for cell in worksheet[row_idx]:
-                if cell.value is not None:
-                    row_has_content = True
-                    break
+            row_has_content = any(cell.value is not None for cell in worksheet[row_idx])
             if row_has_content:
                 last_row_with_content = row_idx
 
@@ -233,15 +229,21 @@ class DataLogger:
         date_entry["batches"] = all_batches
 
         # Process indices
-        atac_indices = [self.convert_index(index) for index in form_data['atac_indices'].split(",")]
+        atac_indices = [self.convert_index(index) for index in form_data['atac_indices'].split(",")] if form_data.get('atac_indices') else []
         atac_indices = [self.pad_index(index) for index in atac_indices]
 
-        rna_indices = [self.convert_index(index) for index in form_data['rna_indices'].split(",")]
+        rna_indices = [self.convert_index(index) for index in form_data['rna_indices'].split(",")] if form_data.get('rna_indices') else []
         rna_indices = [self.pad_index(index) for index in rna_indices]
 
         # Process the data for each reaction and modality
         dup_index_counter = {}
         headers = [cell.value for cell in worksheet[1]]
+
+        # Modalities depend on project
+        if project == "HMBA_CjAtlas_Cortex":
+            modalities = ["RNA"]  # Cortex: RNA only
+        else:
+            modalities = ["RNA", "ATAC"]  # Default: RNA + ATAC
 
         for x in range(rxn_number):
             p_number, port_well = port_wells[x]
@@ -249,7 +251,7 @@ class DataLogger:
 
             tissue_name_base = f"{donor_name}.{tile_location_abbr}.{slab}.{tile}"
 
-            for modality in ["RNA", "ATAC"]:
+            for modality in modalities:
                 self.write_modality_data(
                     worksheet, current_row, modality, x,
                     current_date, mit_name, slab, tile, sort_method,
@@ -335,7 +337,7 @@ class DataLogger:
             atac_size = int(form_data['atac_sizes'].split(',')[x])
             library_cycles = int(form_data['library_cycles_atac'].split(',')[x])
 
-            # These are only defined for RNA; set safe defaults to avoid reference before assignment
+            # RNA-only values not used for ATAC
             cdna_concentration = None
             cdna_amplified_quantity = None
             cdna_library_input = None

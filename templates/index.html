@@ -468,7 +468,7 @@
             <div id="cdna" class="tab-content">
                 <div class="form-row">
                     <label for="atac_prep_date">ATAC Library Prep Date:</label>
-                    <input type="text" name="atac_prep_date" id="atac_prep_date" placeholder="YYMMDD or MM/DD/YY">
+                    <input type="text" class="atac-field" name="atac_prep_date" id="atac_prep_date" placeholder="YYMMDD or MM/DD/YY">
                 </div>
 
                 <div class="form-row">
@@ -501,22 +501,22 @@
             <div id="libraries" class="tab-content">
                 <div class="form-row">
                     <label for="atac_indices">ATAC Indices:</label>
-                    <input type="text" name="atac_indices" id="atac_indices" placeholder="Comma-separated values (e.g., D4,E5,F6)">
+                    <input type="text" class="atac-field" name="atac_indices" id="atac_indices" placeholder="Comma-separated values (e.g., D4,E5,F6)">
                 </div>
 
                 <div class="form-row">
                     <label for="library_cycles_atac">ATAC Library Cycles:</label>
-                    <input type="text" name="library_cycles_atac" id="library_cycles_atac" placeholder="Comma-separated values">
+                    <input type="text" class="atac-field" name="library_cycles_atac" id="library_cycles_atac" placeholder="Comma-separated values">
                 </div>
 
                 <div class="form-row">
                     <label for="atac_lib_concentration">ATAC Library Concentration:</label>
-                    <input type="text" name="atac_lib_concentration" id="atac_lib_concentration" placeholder="Comma-separated values (ng/µL)">
+                    <input type="text" class="atac-field" name="atac_lib_concentration" id="atac_lib_concentration" placeholder="Comma-separated values (ng/µL)">
                 </div>
 
                 <div class="form-row">
                     <label for="atac_sizes">ATAC Library Sizes (bp):</label>
-                    <input type="text" name="atac_sizes" id="atac_sizes" placeholder="Comma-separated values">
+                    <input type="text" class="atac-field" name="atac_sizes" id="atac_sizes" placeholder="Comma-separated values">
                 </div>
 
                 <div class="form-row">
@@ -560,7 +560,22 @@
             event.target.classList.add('active');
         }
 
-        // Project name toggle + slab behavior
+        // Enable/disable ATAC fields depending on project
+        function updateAtacFieldsForProject() {
+            const projectSelect = document.getElementById('project');
+            const atacFields = document.querySelectorAll('.atac-field');
+            const isCortex = projectSelect.value === 'HMBA_CjAtlas_Cortex';
+
+            atacFields.forEach(field => {
+                field.disabled = isCortex;
+                field.readOnly = isCortex;
+                if (isCortex) {
+                    field.value = '';  // clear any previous ATAC values
+                }
+            });
+        }
+
+        // Project name toggle + slab behavior + ATAC behavior
         function toggleProjectName() {
             const projectSelect = document.getElementById('project');
             const projectNameRow = document.getElementById('project-name-row');
@@ -576,15 +591,15 @@
 
             // Enforce slab rules:
             if (projectSelect.value === 'HMBA_CjAtlas_Cortex') {
-                // Allow comma-separated slabs
                 slabInput.placeholder = 'Enter numeric or comma-separated values (e.g., 9,10,11)';
             } else {
-                // Subcortex / Aim 4 / Other: single slab only
                 if (slabInput.value.includes(',')) {
                     slabInput.value = slabInput.value.split(',')[0].trim();
                 }
                 slabInput.placeholder = 'Enter a single numeric slab value';
             }
+
+            updateAtacFieldsForProject();
         }
 
         // FACS population update
@@ -916,6 +931,13 @@
                 }
             });
 
+            // Enforce slab rule at submit time too (non-Cortex must be single value)
+            if (formData.project !== 'HMBA_CjAtlas_Cortex' && formData.slab) {
+                if (formData.slab.includes(',')) {
+                    formData.slab = formData.slab.split(',')[0].trim();
+                }
+            }
+
             console.log('Sending form data:', formData);
 
             // Show loading state
@@ -974,6 +996,10 @@
             // Load saved data on page load
             loadFormData();
 
+            // Apply project-dependent UI (slab + ATAC fields) on load
+            updateAtacFieldsForProject();
+            toggleProjectName();
+
             // Auto-save on every input change
             const inputs = document.querySelectorAll('input, select, textarea');
             inputs.forEach(input => {
@@ -1020,9 +1046,6 @@
             elabInput.addEventListener('input', function() {
                 saveFormData();
             });
-
-            // Ensure project-dependent UI (like slab placeholder) is correct on load
-            toggleProjectName();
         });
     </script>
 </body>
