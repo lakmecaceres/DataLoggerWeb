@@ -148,15 +148,32 @@ class DataLogger:
         mit_name = "cj" + mit_name_input
         donor_name = self.name_to_code[mit_name_input]
 
-        # Process slab and hemisphere
-        slab = form_data['slab'].strip()
+        project = form_data.get('project', '')
+
+        # Process slab and hemisphere (Cortex vs others)
+        raw_slab = form_data['slab'].strip()
         hemisphere = form_data['hemisphere'].split()[0].upper()
-        if hemisphere == "RIGHT":
-            slab = str(int(slab) + 40).zfill(2)
-        elif hemisphere == "BOTH":
-            slab = str(int(slab) + 90).zfill(2)
+
+        if project == "HMBA_CjAtlas_Cortex":
+            # Allow comma-separated slabs, e.g. "9,10,11"
+            slab_list = [s.strip() for s in raw_slab.split(',') if s.strip()]
+            if not slab_list:
+                raise ValueError("No valid slab numbers provided for HMBA_CjAtlas_Cortex")
+
+            # Combined label for identifier: "9_10_11"
+            combined_slab_label = "_".join(slab_list)
+
+            # Use first slab (zero-padded) where single numeric slab is still needed
+            slab = slab_list[0].zfill(2)
         else:
-            slab = slab.zfill(2)
+            combined_slab_label = None
+            slab = raw_slab
+            if hemisphere == "RIGHT":
+                slab = str(int(slab) + 40).zfill(2)
+            elif hemisphere == "BOTH":
+                slab = str(int(slab) + 90).zfill(2)
+            else:
+                slab = slab.zfill(2)
 
         # Handle tile values
         tile_value = form_data['tile'].strip()
@@ -180,7 +197,7 @@ class DataLogger:
 
         rxn_number = int(form_data['rxn_number'])
 
-        # Update counters (same logic as before)
+        # Update counters
         if current_date not in self.counter_data["date_info"]:
             self.counter_data["date_info"][current_date] = {
                 "total_reactions": 0,
@@ -230,15 +247,20 @@ class DataLogger:
             p_number, port_well = port_wells[x]
             barcoded_cell_sample_name = f'P{str(p_number).zfill(4)}_{port_well}'
 
+            tissue_name_base = f"{donor_name}.{tile_location_abbr}.{slab}.{tile}"
+
             for modality in ["RNA", "ATAC"]:
                 self.write_modality_data(
                     worksheet, current_row, modality, x,
                     current_date, mit_name, slab, tile, sort_method,
                     port_well, barcoded_cell_sample_name,
-                    form_data, tissue_name_base=f"{donor_name}.{tile_location_abbr}.{slab}.{tile}",
+                    form_data,
+                    tissue_name_base=tissue_name_base,
                     rna_indices=rna_indices, atac_indices=atac_indices,
                     headers=headers, dup_index_counter=dup_index_counter,
-                    donor_name=donor_name
+                    donor_name=donor_name,
+                    project=project,
+                    combined_slab_label=combined_slab_label
                 )
                 current_row += 1
 
@@ -251,10 +273,22 @@ class DataLogger:
 
     def write_modality_data(self, worksheet, current_row, modality, x, current_date, mit_name, slab, tile, sort_method,
                             port_well, barcoded_cell_sample_name, form_data, tissue_name_base, rna_indices,
-                            atac_indices, headers, dup_index_counter, donor_name):
+                            atac_indices, headers, dup_index_counter, donor_name,
+                            project=None, combined_slab_label=None):
 
-        # Create krienen_lab_identifier without padding
-        krienen_lab_identifier = f'{current_date}_HMBA_{mit_name}_Slab{int(slab)}_Tile{int(tile) if tile.isdigit() else tile}_{sort_method}_{modality}{x + 1}'
+        # Create krienen_lab_identifier
+        if project == "HMBA_CjAtlas_Cortex" and combined_slab_label:
+            # Example: 251118_HMBA_cjMorel_Slabs_9_10_11_Tile22_...
+            slab_part = f"Slabs_{combined_slab_label}"
+        else:
+            # Original behavior: single slab with numeric value
+            slab_part = f"Slab{int(slab)}"
+
+        tile_part = f"Tile{int(tile) if tile.isdigit() else tile}"
+
+        krienen_lab_identifier = (
+            f"{current_date}_HMBA_{mit_name}_{slab_part}_{tile_part}_{sort_method}_{modality}{x + 1}"
+        )
 
         sorter_initials = form_data['sorter_initials'].strip().upper()
         sorting_status = "PS" if sort_method.lower() in ["pooled", "dapi"] else "PN"
@@ -301,6 +335,14 @@ class DataLogger:
             atac_size = int(form_data['atac_sizes'].split(',')[x])
             library_cycles = int(form_data['library_cycles_atac'].split(',')[x])
 
+            # These are only defined for RNA; set safe defaults to avoid reference before assignment
+            cdna_concentration = None
+            cdna_amplified_quantity = None
+            cdna_library_input = None
+            percent_cdna_400bp = None
+            cdna_pcr_cycles = None
+            rna_size = None
+
         # Update library prep set counter
         key = (library_type, library_prep_date, library_index)
         dup_index_counter[key] = dup_index_counter.get(key, 0) + 1
@@ -335,7 +377,7 @@ class DataLogger:
             library_method,
             "10xMultiome-RSeq" if modality == "RNA" else None,
             self.convert_date(form_data['cdna_amp_date']) if modality == "RNA" else None,
-            None,  # amplified_cdna_name
+            None,  # amplified_cdna_name (filled later for RNA)
             cdna_pcr_cycles if modality == "RNA" else None,
             "Pass" if modality == "RNA" else None,
             percent_cdna_400bp if modality == "RNA" else None,
@@ -380,8 +422,7 @@ class DataLogger:
                 cell.fill = self.black_fill
 
         # Apply black fill to tissue_name_old
-        tissue_old_col = headers.index('tissue_name_old') + 1
-        worksheet.cell(row=current_row, column=tissue_old_col).fill = self.black_fill
+        tissue_old_col = headers.index('tissue_name_old') + 1        worksheet.cell(row=current_row, column=tissue_old_col).fill = self.black_fill
 
 
 # Create global instance
