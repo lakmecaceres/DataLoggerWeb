@@ -296,9 +296,17 @@ class DataLogger:
         sorting_status = "PS" if sort_method.lower() in ["pooled", "dapi"] else "PN"
 
         tissue_name = tissue_name_base
-        dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Multiome'
-        enriched_cell_sample_container_name = f"MPXM_{current_date}_{sorting_status}_{sorter_initials}"
-        enriched_cell_sample_name = f'MPXM_{current_date}_{sorting_status}_{sorter_initials}_{port_well}'
+
+        # Aim 4 uses Rseq-only naming and TX prefix; others use Multiome + XM
+        if project == "Aim 4":
+            dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Rseq'
+            enriched_prefix = "MPTX"  # TX for RNAseq-only
+        else:
+            dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Multiome'
+            enriched_prefix = "MPXM"  # XM for Multiome
+
+        enriched_cell_sample_container_name = f"{enriched_prefix}_{current_date}_{sorting_status}_{sorter_initials}"
+        enriched_cell_sample_name = f'{enriched_prefix}_{current_date}_{sorting_status}_{sorter_initials}_{port_well}'
 
         study = "HMBA_CjAtlas_Subcortex" if form_data['project'] == "HMBA_CjAtlas_Subcortex" else form_data.get(
             'project_name', '')
@@ -312,7 +320,12 @@ class DataLogger:
                              else self.convert_date(form_data['atac_prep_date']))
 
         if modality == "RNA":
-            library_method = "10xMultiome-RSeq"
+            # Library method differs for Aim 4
+            if project == "Aim 4":
+                library_method = "10xV4"
+            else:
+                library_method = "10xMultiome-RSeq"
+
             library_type = "LPLCXR"
             library_index = rna_indices[x]
 
@@ -377,7 +390,7 @@ class DataLogger:
             enriched_cell_sample_quantity_count,
             barcoded_cell_sample_name,
             library_method,
-            "10xMultiome-RSeq" if modality == "RNA" else None,
+            "10xMultiome-RSeq" if modality == "RNA" else None,  # cDNA_amplification_method (kept as original)
             self.convert_date(form_data['cdna_amp_date']) if modality == "RNA" else None,
             None,  # amplified_cdna_name (filled later for RNA)
             cdna_pcr_cycles if modality == "RNA" else None,
