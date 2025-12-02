@@ -9,8 +9,315 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧬</text></svg>">
 
     <style>
-        /* [unchanged styles truncated for brevity – use exactly what I gave before] */
-        /* Keep the same CSS from the previous full index.html version */
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .counter-badge {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #0078d7;
+            color: white;
+            border: none;
+            border-radius: 20px;
+            padding: 8px 16px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .counter-badge:hover {
+            background: #106ebe;
+            transform: scale(1.05);
+        }
+
+        .counter-badge:active {
+            transform: scale(0.95);
+        }
+
+        .header {
+            background-color: #0078d7;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+
+        .header p {
+            margin: 5px 0 0 0;
+            font-size: 12px;
+            opacity: 0.9;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #ddd;
+            margin-bottom: 15px;
+        }
+
+        .tab {
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            border-bottom: none;
+            padding: 8px 16px;
+            cursor: pointer;
+            border-radius: 6px 6px 0 0;
+            margin-right: 2px;
+            font-weight: 500;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .tab:hover {
+            background-color: #e9ecef;
+        }
+
+        .tab.active {
+            background-color: #0078d7;
+            color: white;
+            border-color: #0078d7;
+        }
+
+        .tab-content {
+            display: none;
+            padding: 15px 0;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 12px;
+            padding: 5px 0;
+        }
+
+        label {
+            font-weight: 500;
+            color: #333;
+            font-size: 14px;
+        }
+
+        input, select, textarea {
+            padding: 6px 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #0078d7;
+            box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.2);
+        }
+
+        .save-controls {
+            text-align: center;
+            margin: 15px 0;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #e9ecef;
+        }
+
+        .save-btn {
+            margin: 0 5px;
+            padding: 6px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+
+        .save-btn:hover {
+            background: #e9ecef;
+        }
+
+        .save-status {
+            margin-left: 10px;
+            font-size: 11px;
+            color: #666;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+        }
+
+        .submit-btn, .download-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        .submit-btn {
+            background-color: #0078d7;
+            color: white;
+        }
+
+        .submit-btn:hover {
+            background-color: #106ebe;
+        }
+
+        .submit-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .download-btn {
+            background-color: #107c10;
+            color: white;
+        }
+
+        .download-btn:hover {
+            background-color: #0e6b0e;
+        }
+
+        .paste-btn {
+            background-color: #0078d7;
+            color: white;
+            border: none;
+            padding: 6px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 8px;
+            transition: background-color 0.3s ease;
+        }
+
+        .paste-btn:hover {
+            background-color: #106ebe;
+        }
+
+        .paste-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .elab-group {
+            display: flex;
+            align-items: center;
+        }
+
+        .elab-group input {
+            flex: 1;
+        }
+
+        .elab-editable {
+            background-color: #fff3cd !important;
+            border-color: #ffc107 !important;
+        }
+
+        /* Error styling */
+        .error-field {
+            border: 2px solid #d32f2f !important;
+            background-color: #ffebee !important;
+            box-shadow: 0 0 5px rgba(211, 47, 47, 0.3);
+        }
+
+        .error-message {
+            color: #d32f2f;
+            font-size: 11px;
+            margin-top: 2px;
+            display: block;
+            grid-column: 2;
+        }
+
+        .success-field {
+            border: 2px solid #388e3c !important;
+            background-color: #e8f5e8 !important;
+        }
+
+        .error-summary {
+            background-color: #ffebee;
+            border: 1px solid #d32f2f;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            color: #d32f2f;
+            font-size: 14px;
+        }
+
+        .validation-info {
+            background-color: #e3f2fd;
+            border: 1px solid #2196f3;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            color: #1976d2;
+            font-size: 12px;
+        }
+
+        @media (max-width: 768px) {
+            .form-row {
+                grid-template-columns: 1fr;
+                gap: 5px;
+            }
+
+            label {
+                font-weight: bold;
+            }
+
+            .tabs {
+                flex-wrap: wrap;
+            }
+
+            .tab {
+                flex: 1;
+                min-width: 100px;
+                text-align: center;
+                margin-bottom: 2px;
+            }
+
+            .button-group {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .counter-badge {
+                top: 10px;
+                right: 10px;
+                font-size: 14px;
+                padding: 6px 12px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -253,7 +560,7 @@
             event.target.classList.add('active');
         }
 
-        // Enable/disable ATAC fields depending on project
+        // Enable/disable ATAC fields depending on project (Aim 4 has no ATAC)
         function updateAtacFieldsForProject() {
             const projectSelect = document.getElementById('project');
             const atacFields = document.querySelectorAll('.atac-field');
@@ -282,12 +589,12 @@
                 document.getElementById('project_name').required = false;
             }
 
-            // Slab placeholder:
+            // Slab placeholder / rules:
             if (projectSelect.value === 'HMBA_CjAtlas_Cortex') {
-                // Cortex: allow multi-slab (backend will handle multi-slab)
+                // Cortex: allow multi-slab (backend handles comma-separated list)
                 slabInput.placeholder = 'Enter numeric or comma-separated values (e.g., 9,10,11)';
             } else {
-                // Aim 4 + Subcortex + Other: enforce single slab
+                // Aim 4 + Subcortex + Other: single slab only
                 if (slabInput.value.includes(',')) {
                     slabInput.value = slabInput.value.split(',')[0].trim();
                 }
@@ -297,7 +604,7 @@
             updateAtacFieldsForProject();
         }
 
-        // FACS population update (unchanged)
+        // FACS population update
         function updateFacsPopulation() {
             const sortMethod = document.getElementById('sort_method').value;
             const facsPopulation = document.getElementById('facs_population');
@@ -317,17 +624,336 @@
             saveFormData();
         }
 
-        // [Counter badge, pasteElabLink, downloadExcel, auto-save, load/clearSavedData
-        //  and validateForm remain exactly as in the previous full version,
-        //  except for the slab submit guard which we keep unchanged.]
+        // Counter badge functions
+        function loadCounterBadge() {
+            fetch('/get_counter')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('counter-badge').textContent = data.next_counter || '90';
+                })
+                .catch(error => {
+                    console.error('Error loading counter:', error);
+                    document.getElementById('counter-badge').textContent = '?';
+                });
+        }
 
-        // In validateForm, keep the slab submit guard:
-        // if (formData.project !== 'HMBA_CjAtlas_Cortex' && formData.slab) {
-        //     if (formData.slab.includes(',')) {
-        //         formData.slab = formData.slab.split(',')[0].trim();
-        //     }
-        // }
+        function editCounter() {
+            const currentCounter = document.getElementById('counter-badge').textContent;
+            const newCounter = prompt(`Current P-counter: ${currentCounter}\n\nEnter new counter value:`, currentCounter);
 
+            if (newCounter === null) return;
+
+            const counterNum = parseInt(newCounter);
+            if (isNaN(counterNum) || counterNum < 0) {
+                alert('Please enter a valid positive number.');
+                return;
+            }
+
+            if (!confirm(`Change P-counter from ${currentCounter} to ${counterNum}?`)) {
+                return;
+            }
+
+            document.getElementById('counter-badge').textContent = '...';
+
+            fetch('/update_counter', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ new_counter: counterNum })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('counter-badge').textContent = counterNum;
+                    const badge = document.getElementById('counter-badge');
+                    badge.style.background = '#107c10';
+                    setTimeout(() => {
+                        badge.style.background = '#0078d7';
+                    }, 1000);
+                } else {
+                    alert('Error updating counter: ' + data.error);
+                    loadCounterBadge();
+                }
+            })
+            .catch(error => {
+                console.error('Error updating counter:', error);
+                alert('Error updating counter. Please try again.');
+                loadCounterBadge();
+            });
+        }
+
+        // eLab link paste functionality
+        async function pasteElabLink() {
+            const button = document.querySelector('.paste-btn');
+            const input = document.getElementById('elab_link');
+
+            try {
+                button.textContent = '⏳';
+                button.disabled = true;
+
+                const text = await navigator.clipboard.readText();
+                input.value = text.trim();
+
+                input.readOnly = false;
+                input.classList.add('elab-editable');
+
+                button.textContent = '✅';
+                button.style.backgroundColor = '#107c10';
+
+                saveFormData();
+
+                setTimeout(() => {
+                    button.textContent = '📋 Paste';
+                    button.style.backgroundColor = '#0078d7';
+                    button.disabled = false;
+                }, 2000);
+
+            } catch (err) {
+                button.textContent = '❌';
+                button.style.backgroundColor = '#d13438';
+
+                alert('Clipboard access denied. Please manually copy and paste the link into the field.');
+                input.readOnly = false;
+                input.classList.add('elab-editable');
+                input.placeholder = 'Manually paste your eLab link here';
+
+                setTimeout(() => {
+                    button.textContent = '📋 Paste';
+                    button.style.backgroundColor = '#0078d7';
+                    button.disabled = false;
+                }, 3000);
+            }
+        }
+
+        // Download Excel
+        function downloadExcel() {
+            window.location.href = '/download';
+        }
+
+        // AUTO-SAVE
+        function saveFormData() {
+            const formData = {};
+            const inputs = document.querySelectorAll('input, select, textarea');
+
+            inputs.forEach(input => {
+                if (input.name) {
+                    formData[input.name] = input.value;
+                }
+            });
+
+            localStorage.setItem('krienen_form_data', JSON.stringify(formData));
+
+            const status = document.getElementById('save-status');
+            status.textContent = 'Saved ' + new Date().toLocaleTimeString();
+            status.style.color = '#107c10';
+
+            setTimeout(() => {
+                status.textContent = 'Auto-save enabled';
+                status.style.color = '#666';
+            }, 2000);
+        }
+
+        function loadFormData() {
+            const savedData = localStorage.getItem('krienen_form_data');
+            if (savedData) {
+                const formData = JSON.parse(savedData);
+
+                Object.keys(formData).forEach(fieldName => {
+                    const field = document.querySelector(`[name="${fieldName}"]`);
+                    if (field && formData[fieldName]) {
+                        field.value = formData[fieldName];
+
+                        if (field.tagName === 'SELECT') {
+                            field.dispatchEvent(new Event('change'));
+                        }
+
+                        if (fieldName === 'elab_link' && formData[fieldName]) {
+                            field.readOnly = false;
+                            field.classList.add('elab-editable');
+                        }
+                    }
+                });
+
+                const status = document.getElementById('save-status');
+                status.textContent = 'Data loaded from previous session';
+                status.style.color = '#0078d7';
+
+                setTimeout(() => {
+                    status.textContent = 'Auto-save enabled';
+                    status.style.color = '#666';
+                }, 3000);
+            } else {
+                const status = document.getElementById('save-status');
+                status.textContent = 'No saved data found';
+                status.style.color = '#d32f2f';
+
+                setTimeout(() => {
+                    status.textContent = 'Auto-save enabled';
+                    status.style.color = '#666';
+                }, 2000);
+            }
+        }
+
+        function clearSavedData() {
+            localStorage.removeItem('krienen_form_data');
+
+            const status = document.getElementById('save-status');
+            status.textContent = 'Saved data cleared';
+            status.style.color = '#d32f2f';
+
+            setTimeout(() => {
+                status.textContent = 'Auto-save enabled';
+                status.style.color = '#666';
+            }, 2000);
+        }
+
+        // FORM SUBMISSION
+        function validateForm(event) {
+            if (event) {
+                event.preventDefault();
+            }
+
+            const existingSummary = document.querySelector('.error-summary');
+            if (existingSummary) existingSummary.remove();
+
+            const allFields = document.querySelectorAll('input, select');
+            allFields.forEach(field => {
+                field.classList.remove('error-field', 'success-field');
+                const errorMsg = document.getElementById(`${field.name}-error`);
+                if (errorMsg) errorMsg.remove();
+            });
+
+            let hasErrors = false;
+            const errors = [];
+
+            const criticalFields = [
+                {name: 'experiment_date', label: 'Experiment Date'},
+                {name: 'marmoset_name', label: 'Marmoset Name'},
+                {name: 'hemisphere', label: 'Hemisphere'},
+                {name: 'tile_location', label: 'Tile Location'},
+                {name: 'slab_number', label: 'Slab Number'},
+                {name: 'tile_number', label: 'Tile Number'},
+                {name: 'sorter_initials', label: 'Sorter Initials'},
+                {name: 'sort_method', label: 'Sort Method'},
+                {name: 'rxn_number', label: 'Number of Reactions'}
+            ];
+
+            criticalFields.forEach(fieldInfo => {
+                const field = document.querySelector(`[name="${fieldInfo.name}"]`);
+                if (field && !field.value.trim()) {
+                    hasErrors = true;
+                    errors.push(fieldInfo.label);
+                    field.classList.add('error-field');
+                }
+            });
+
+            if (hasErrors) {
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'error-summary';
+                errorDiv.innerHTML = `
+                    <strong>⚠️ Please fill in the following required fields:</strong>
+                    <ul>
+                        ${errors.map(error => `<li>${error}</li>`).join('')}
+                    </ul>
+                `;
+
+                const form = document.querySelector('form');
+                form.insertBefore(errorDiv, form.firstChild);
+
+                const firstError = document.querySelector('.error-field');
+                if (firstError) {
+                    firstError.scrollIntoView({behavior: 'smooth', block: 'center'});
+                    firstError.focus();
+                }
+
+                return false;
+            }
+
+            // Collect form data as JSON
+            const formData = {};
+            const inputs = document.querySelectorAll('input, select, textarea');
+            inputs.forEach(input => {
+                if (input.name) {
+                    const fieldMapping = {
+                        'experiment_date': 'date',
+                        'marmoset_name': 'marmoset',
+                        'slab_number': 'slab',
+                        'tile_number': 'tile',
+                        'hemisphere': 'hemisphere',
+                        'tile_location': 'tile_location',
+                        'sort_method': 'sort_method',
+                        'rxn_number': 'rxn_number',
+                        'sorter_initials': 'sorter_initials',
+                        'facs_population': 'facs_population',
+                        'expected_recovery': 'expected_recovery',
+                        'nuclei_concentration': 'nuclei_concentration',
+                        'nuclei_volume': 'nuclei_volume',
+                        'project': 'project',
+                        'project_name': 'project_name',
+                        'elab_link': 'elab_link',
+                        'atac_prep_date': 'atac_prep_date',
+                        'cdna_amp_date': 'cdna_amp_date',
+                        'rna_prep_date': 'rna_prep_date',
+                        'cdna_pcr_cycles': 'cdna_pcr_cycles',
+                        'cdna_concentration': 'cdna_concentration',
+                        'percent_cdna_400bp': 'percent_cdna_400bp',
+                        'atac_indices': 'atac_indices',
+                        'library_cycles_atac': 'library_cycles_atac',
+                        'atac_lib_concentration': 'atac_lib_concentration',
+                        'atac_sizes': 'atac_sizes',
+                        'rna_indices': 'rna_indices',
+                        'library_cycles_rna': 'library_cycles_rna',
+                        'rna_lib_concentration': 'rna_lib_concentration',
+                        'rna_sizes': 'rna_sizes'
+                    };
+
+                    const backendFieldName = fieldMapping[input.name] || input.name;
+                    formData[backendFieldName] = input.value || '';
+                }
+            });
+
+            // Enforce slab rule at submit time (only Cortex can have multi-slab)
+            if (formData.project !== 'HMBA_CjAtlas_Cortex' && formData.slab) {
+                if (formData.slab.includes(',')) {
+                    formData.slab = formData.slab.split(',')[0].trim();
+                }
+            }
+
+            const submitBtn = document.querySelector('.submit-btn');
+            const originalText = submitBtn.textContent;
+            submitBtn.textContent = '⏳ Submitting...';
+            submitBtn.disabled = true;
+
+            fetch('/submit', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify(formData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('✅ Data submitted successfully!');
+                    clearSavedData();
+                    document.querySelector('form').reset();
+                } else {
+                    alert('❌ Error: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Fetch error:', error);
+                alert('❌ Network error occurred. Please try again.');
+            })
+            .finally(() => {
+                submitBtn.textContent = originalText;
+                submitBtn.disabled = false;
+            });
+
+            return false;
+        }
+
+        // Initialize
         document.addEventListener('DOMContentLoaded', function() {
             loadCounterBadge();
             loadFormData();
