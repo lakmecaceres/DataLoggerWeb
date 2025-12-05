@@ -20,11 +20,45 @@ class DataLogger:
         self.excel_file = os.path.join(self.config_dir, 'krienen_data_log.xlsx')
 
         self.name_to_code = {
+            "Petra": "CJ23.56.001",
             "Croissant": "CJ23.56.002",
             "Nutmeg": "CJ23.56.003",
-            "Jellybean": "CJ24.56.001",
+            "Tank": "CJ23.56.004",
+            "JellyBean": "CJ24.56.001",
+            "Pringle": "CJ24.56.002",
+            "Paarl": "CJ24.56.003",
             "Rambo": "CJ24.56.004",
-            "Morel": "CJ24.56.015"
+            "Clack": "CJ24.56.005",
+            "Porthos": "CJ24.56.006",
+            "Deegan": "CJ24.56.007",
+            "Dangerboy": "CJ24.56.008",
+            "Hildegard": "CJ24.56.009",
+            "Villopoto": "CJ24.56.010",
+            "Pathy": "CJ24.56.011",
+            "Toki": "CJ24.56.012",
+            "Georgia": "CJ24.56.013",
+            "Carmichael": "CJ24.56.014",
+            "Morel": "CJ24.56.015",
+            "Orion": "CJ24.56.016",
+            "EllieMae": "CJ24.56.017",
+            "Lambert": "CJ24.56.018",
+            "Ocean": "CJ25.56.001",
+            "Stella": "CJ25.56.002",
+            "Wyatt": "CJ25.56.003",
+            "Piglet": "CJ25.56.004",
+            "Moira": "CJ25.56.005",
+            "Willow": "CJ25.56.006",
+            "Wren": "CJ25.56.007",
+            "Valentino": "CJ25.56.008",
+            "Misty": "CJ25.56.009",
+            "Link": "CJ25.56.010",
+            "Owlette": "CJ25.56.011",
+            "Chickpea": "CJ25.56.012",
+            "Benedict": "CJ25.56.013",
+            "Vera": "CJ25.56.014",
+            "Tango": "CJ25.56.015",
+            "Paris": "CJ25.56.016",
+            "Lapras": "CJ25.56.017"
         }
 
         self.tile_location_map = {
