@@ -83,7 +83,8 @@ class DataLogger:
         else:
             self.counter_data = {}
 
-        self.counter_data.setdefault("next_counter", 90)
+        # None means: user has never explicitly set the chip number in this environment
+        self.counter_data.setdefault("next_counter", None)
         self.counter_data.setdefault("date_info", {})
         self.counter_data.setdefault("amp_counter", {})
 
@@ -190,11 +191,13 @@ class DataLogger:
             if not slab_list:
                 raise ValueError("No valid slab numbers provided for HMBA_CjAtlas_Cortex")
             combined_slab_label = "_".join(slab_list)  # e.g. "05_06_07"
+            slab_count = len(slab_list)
             # Use first slab where a single numeric slab is needed
             slab = slab_list[0]
         else:
             # Subcortex + Aim 4 + Other: single slab only
             combined_slab_label = None
+            slab_count = 1
             slab = raw_slab
             if hemisphere == "RIGHT":
                 slab = str(int(slab) + 40).zfill(2)
@@ -240,6 +243,11 @@ class DataLogger:
         batches_before = (existing_total + 7) // 8
         batches_after = (total_reactions_after + 7) // 8
         new_batches_needed = batches_after - batches_before
+
+        # If next_counter is still None (never set by user), we still need a starting P number.
+        # Use 90 as an internal default, and then increment from there.
+        if self.counter_data["next_counter"] is None:
+            self.counter_data["next_counter"] = 90
 
         new_p_numbers = [self.counter_data["next_counter"] + i for i in range(new_batches_needed)]
         self.counter_data["next_counter"] += new_batches_needed
@@ -302,7 +310,8 @@ class DataLogger:
                     headers=headers, dup_index_counter=dup_index_counter,
                     donor_name=donor_name,
                     project=project,
-                    combined_slab_label=combined_slab_label
+                    combined_slab_label=combined_slab_label,
+                    slab_count=slab_count
                 )
                 current_row += 1
 
@@ -316,14 +325,14 @@ class DataLogger:
     def write_modality_data(self, worksheet, current_row, modality, x, current_date, mit_name, slab, tile, sort_method,
                             port_well, barcoded_cell_sample_name, form_data, tissue_name_base, rna_indices,
                             atac_indices, headers, dup_index_counter, donor_name,
-                            project=None, combined_slab_label=None):
+                            project=None, combined_slab_label=None, slab_count=1):
 
         # Create krienen_lab_identifier
-        if project == "HMBA_CjAtlas_Cortex" and combined_slab_label:
+        if project == "HMBA_CjAtlas_Cortex" and combined_slab_label and slab_count > 1:
             # Example: 251118_HMBA_cjMorel_Slabs_05_06_07_Tile22_...
             slab_part = f"Slabs_{combined_slab_label}"
         else:
-            # Original behavior: single slab with numeric value
+            # Single slab: standard "SlabNN"
             slab_part = f"Slab{int(slab)}"
 
         tile_part = f"Tile{int(tile) if tile.isdigit() else tile}"
@@ -532,11 +541,15 @@ def download_excel():
 def get_counter():
     try:
         return jsonify({
-            'next_counter': data_logger.counter_data.get('next_counter', 90),
+            'next_counter': data_logger.counter_data.get('next_counter', None),
             'success': True
         })
     except Exception as e:
-        return jsonify({'next_counter': 90, 'success': False, 'error': str(e)})
+        return jsonify({
+            'next_counter': None,
+            'success': False,
+            'error': str(e)
+        })
 
 
 @app.route('/update_counter', methods=['POST'])
@@ -560,6 +573,8 @@ def update_counter():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+
+# Debug endpoints (optional; remove later if you don't want them exposed)
 @app.route('/debug/counter')
 def debug_counter():
     try:
@@ -576,6 +591,30 @@ def debug_counter():
             "error": str(e),
             "success": False
         }), 500
+
+
+@app.route('/debug/reset_counter', methods=['POST'])
+def debug_reset_counter():
+    try:
+        data_logger.counter_data = {
+            "next_counter": None,
+            "date_info": {},
+            "amp_counter": {}
+        }
+        with open(data_logger.counter_file, 'w') as f:
+            json.dump(data_logger.counter_data, f, indent=4)
+        return jsonify({
+            "path": data_logger.counter_file,
+            "success": True,
+            "message": "Counter data reset to defaults."
+        })
+    except Exception as e:
+        return jsonify({
+            "path": data_logger.counter_file,
+            "success": False,
+            "error": str(e)
+        }), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8080)

@@ -323,7 +323,7 @@
 <body>
     <!-- Counter Badge -->
     <button id="counter-badge" class="counter-badge" onclick="editCounter()">
-        104
+        Chip Number = ?
     </button>
 
     <div class="header">
@@ -626,7 +626,7 @@
             // Slab placeholder / rules:
             if (projectSelect.value === 'HMBA_CjAtlas_Cortex') {
                 // Cortex: allow multi-slab (backend handles comma-separated list)
-                slabInput.placeholder = 'Enter numeric or comma-separated values (e.g., 5,6,7)';
+                slabInput.placeholder = 'Enter numeric or comma-separated values (e.g., 9,10,11)';
             } else {
                 // Aim 4 + Subcortex + Other: single slab only
                 if (slabInput.value.includes(',')) {
@@ -660,20 +660,40 @@
 
         // Counter badge functions
         function loadCounterBadge() {
+            const badge = document.getElementById('counter-badge');
+
             fetch('/get_counter')
                 .then(response => response.json())
                 .then(data => {
-                    document.getElementById('counter-badge').textContent = data.next_counter || '90';
+                    const value = data.next_counter;
+
+                    if (value == null) {
+                        // User has never set chip number: keep "Chip Number = ?"
+                        const current = badge.textContent.trim();
+                        if (!current) {
+                            badge.textContent = 'Chip Number = ?';
+                        }
+                    } else {
+                        // User has set chip number before; resume automatic display
+                        badge.textContent = value;
+                    }
                 })
                 .catch(error => {
                     console.error('Error loading counter:', error);
-                    document.getElementById('counter-badge').textContent = '?';
+                    // leave current badge text
                 });
         }
 
         function editCounter() {
-            const currentCounter = document.getElementById('counter-badge').textContent;
-            const newCounter = prompt(`Current P-counter: ${currentCounter}\n\nEnter new counter value:`, currentCounter);
+            const badge = document.getElementById('counter-badge');
+            const currentText = badge.textContent.trim();
+            const currentCounter = /^\d+$/.test(currentText) ? currentText : '';
+
+            const newCounter = prompt(
+                `Current P-counter: ${currentCounter || 'not set'}\n\n` +
+                "Enter new counter value (this is the number in 'barcoded_cell_sample_name' / 'chip number'):",
+                currentCounter || ''
+            );
 
             if (newCounter === null) return;
 
@@ -683,11 +703,11 @@
                 return;
             }
 
-            if (!confirm(`Change P-counter from ${currentCounter} to ${counterNum}?`)) {
+            if (!confirm(`Change P-counter to ${counterNum}?`)) {
                 return;
             }
 
-            document.getElementById('counter-badge').textContent = '...';
+            badge.textContent = '...';
 
             fetch('/update_counter', {
                 method: 'POST',
@@ -697,8 +717,7 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    document.getElementById('counter-badge').textContent = counterNum;
-                    const badge = document.getElementById('counter-badge');
+                    badge.textContent = counterNum;
                     badge.style.background = '#107c10';
                     setTimeout(() => {
                         badge.style.background = '#0078d7';
@@ -899,6 +918,20 @@
                     firstError.focus();
                 }
 
+                return false;
+            }
+
+            // Require chip number to be set at least once
+            const badge = document.getElementById('counter-badge');
+            const badgeText = badge.textContent.trim();
+            const isUnsetBadge =
+                badgeText === '' ||
+                badgeText === 'Chip Number = ?' ||
+                badgeText === '...';
+
+            if (isUnsetBadge) {
+                alert("Please enter the most recent 'barcoded_cell_sample_name' entry from the data log where it says 'chip number' at the top right.");
+                badge.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 return false;
             }
 
