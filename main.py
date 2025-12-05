@@ -280,7 +280,7 @@ class DataLogger:
         headers = [cell.value for cell in worksheet[1]]
 
         # Modalities depend on project:
-        # - Aim 4: RNA only (no ATAC)
+        # - HMBA_Aim4: RNA only (no ATAC)
         # - All others (Subcortex, Cortex, Other): RNA + ATAC
         if project == "HMBA_Aim4":
             modalities = ["RNA"]
@@ -346,7 +346,7 @@ class DataLogger:
 
         tissue_name = tissue_name_base
 
-        # Aim 4 uses Rseq-only naming and TX prefix; others use Multiome + XM
+        # HMBA_Aim4 uses Rseq-only naming and TX prefix; others use Multiome + XM
         if project == "HMBA_Aim4":
             dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Rseq'
             enriched_prefix = "MPTX"  # TX for RNAseq-only
@@ -369,7 +369,7 @@ class DataLogger:
                              else self.convert_date(form_data['atac_prep_date']))
 
         if modality == "RNA":
-            # Library method + type differ for Aim 4
+            # Library method + type differ for HMBA_Aim4
             if project == "HMBA_Aim4":
                 library_method = "10xV4"
                 library_type = "LPLCTX"   # TX instead of XR for Aim 4

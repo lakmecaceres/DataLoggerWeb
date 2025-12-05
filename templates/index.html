@@ -594,16 +594,16 @@
             event.target.classList.add('active');
         }
 
-        // Enable/disable ATAC fields depending on project (Aim 4 has no ATAC)
+        // Enable/disable ATAC fields depending on project (HMBA_Aim4 has no ATAC)
         function updateAtacFieldsForProject() {
             const projectSelect = document.getElementById('project');
             const atacFields = document.querySelectorAll('.atac-field');
             const isHMBAAim4 = projectSelect.value === 'HMBA_Aim4';
 
             atacFields.forEach(field => {
-                field.disabled = isHMBA_Aim4;
-                field.readOnly = isHMBA_Aim4;
-                if (isHMBA_Aim4) {
+                field.disabled = isHMBAAim4;
+                field.readOnly = isHMBAAim4;
+                if (isHMBAAim4) {
                     field.value = '';  // clear any previous ATAC values for Aim 4
                 }
             });
@@ -628,7 +628,7 @@
                 // Cortex: allow multi-slab (backend handles comma-separated list)
                 slabInput.placeholder = 'Enter numeric or comma-separated values (e.g., 9,10,11)';
             } else {
-                // Aim 4 + Subcortex + Other: single slab only
+                // HMBA_Aim4 + Subcortex + Other: single slab only
                 if (slabInput.value.includes(',')) {
                     slabInput.value = slabInput.value.split(',')[0].trim();
                 }
