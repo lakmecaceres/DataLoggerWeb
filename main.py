@@ -282,7 +282,7 @@ class DataLogger:
         # Modalities depend on project:
         # - Aim 4: RNA only (no ATAC)
         # - All others (Subcortex, Cortex, Other): RNA + ATAC
-        if project == "Aim 4":
+        if project == "HMBA_Aim4":
             modalities = ["RNA"]
         else:
             modalities = ["RNA", "ATAC"]
@@ -347,7 +347,7 @@ class DataLogger:
         tissue_name = tissue_name_base
 
         # Aim 4 uses Rseq-only naming and TX prefix; others use Multiome + XM
-        if project == "Aim 4":
+        if project == "HMBA_Aim4":
             dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Rseq'
             enriched_prefix = "MPTX"  # TX for RNAseq-only
         else:
@@ -370,7 +370,7 @@ class DataLogger:
 
         if modality == "RNA":
             # Library method + type differ for Aim 4
-            if project == "Aim 4":
+            if project == "HMBA_Aim4":
                 library_method = "10xV4"
                 library_type = "LPLCTX"   # TX instead of XR for Aim 4
             else:
@@ -472,7 +472,7 @@ class DataLogger:
             letter = chr(65 + (reaction_count % 8))
             batch_num_for_amp = (reaction_count // 8) + 1
 
-            if project == "Aim 4":
+            if project == "HMBA_Aim4":
                 amp_prefix = "APLCTX"   # TX instead of XR for Aim 4
             else:
                 amp_prefix = "APLCXR"   # Multiome RNA

@@ -354,7 +354,7 @@
                     <select name="project" id="project" onchange="toggleProjectName()">
                         <option value="HMBA_CjAtlas_Subcortex">HMBA_CjAtlas_Subcortex</option>
                         <option value="HMBA_CjAtlas_Cortex">HMBA_CjAtlas_Cortex</option>
-                        <option value="Aim 4">Aim 4</option>
+                        <option value="HMBA_Aim4">HMBA_Aim4</option>
                         <option value="Other">Other</option>
                     </select>
                 </div>
@@ -598,12 +598,12 @@
         function updateAtacFieldsForProject() {
             const projectSelect = document.getElementById('project');
             const atacFields = document.querySelectorAll('.atac-field');
-            const isAim4 = projectSelect.value === 'Aim 4';
+            const isHMBAAim4 = projectSelect.value === 'HMBA_Aim4';
 
             atacFields.forEach(field => {
-                field.disabled = isAim4;
-                field.readOnly = isAim4;
-                if (isAim4) {
+                field.disabled = isHMBA_Aim4;
+                field.readOnly = isHMBA_Aim4;
+                if (isHMBA_Aim4) {
                     field.value = '';  // clear any previous ATAC values for Aim 4
                 }
             });
