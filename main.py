@@ -560,6 +560,22 @@ def update_counter():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+@app.route('/debug/counter')
+def debug_counter():
+    try:
+        with open(data_logger.counter_file, 'r') as f:
+            contents = json.load(f)
+        return jsonify({
+            "path": data_logger.counter_file,
+            "counter_data": contents,
+            "success": True
+        })
+    except Exception as e:
+        return jsonify({
+            "path": data_logger.counter_file,
+            "error": str(e),
+            "success": False
+        }), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8080)
