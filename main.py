@@ -185,13 +185,13 @@ class DataLogger:
         hemisphere = form_data['hemisphere'].split()[0].upper()
 
         if project == "HMBA_CjAtlas_Cortex":
-            # Cortex: allow comma-separated slabs, e.g. "9,10,11"
-            slab_list = [s.strip() for s in raw_slab.split(',') if s.strip()]
+            # Cortex: allow comma-separated slabs, e.g. "5,6,7"
+            slab_list = [s.strip().zfill(2) for s in raw_slab.split(',') if s.strip()]
             if not slab_list:
                 raise ValueError("No valid slab numbers provided for HMBA_CjAtlas_Cortex")
-            combined_slab_label = "_".join(slab_list)
-            # Use first slab (zero-padded) where a single numeric slab is needed
-            slab = slab_list[0].zfill(2)
+            combined_slab_label = "_".join(slab_list)  # e.g. "05_06_07"
+            # Use first slab where a single numeric slab is needed
+            slab = slab_list[0]
         else:
             # Subcortex + Aim 4 + Other: single slab only
             combined_slab_label = None
@@ -283,7 +283,13 @@ class DataLogger:
             p_number, port_well = port_wells[x]
             barcoded_cell_sample_name = f'P{str(p_number).zfill(4)}_{port_well}'
 
-            tissue_name_base = f"{donor_name}.{tile_location_abbr}.{slab}.{tile}"
+            # For Cortex, tissue_name uses combined slabs with underscores; others use single slab
+            if project == "HMBA_CjAtlas_Cortex" and combined_slab_label:
+                slab_for_tissue = combined_slab_label  # e.g. "05_06_07"
+            else:
+                slab_for_tissue = slab               # e.g. "05"
+
+            tissue_name_base = f"{donor_name}.{tile_location_abbr}.{slab_for_tissue}.{tile}"
 
             for modality in modalities:
                 self.write_modality_data(
@@ -314,7 +320,7 @@ class DataLogger:
 
         # Create krienen_lab_identifier
         if project == "HMBA_CjAtlas_Cortex" and combined_slab_label:
-            # Example: 251118_HMBA_cjMorel_Slabs_9_10_11_Tile22_...
+            # Example: 251118_HMBA_cjMorel_Slabs_05_06_07_Tile22_...
             slab_part = f"Slabs_{combined_slab_label}"
         else:
             # Original behavior: single slab with numeric value
