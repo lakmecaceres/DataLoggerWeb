@@ -360,13 +360,14 @@ class DataLogger:
                              else self.convert_date(form_data['atac_prep_date']))
 
         if modality == "RNA":
-            # Library method differs for Aim 4
+            # Library method + type differ for Aim 4
             if project == "Aim 4":
                 library_method = "10xV4"
+                library_type = "LPLCTX"   # TX instead of XR for Aim 4
             else:
                 library_method = "10xMultiome-RSeq"
+                library_type = "LPLCXR"   # Multiome RNA
 
-            library_type = "LPLCXR"
             library_index = rna_indices[x]
 
             cdna_concentration = float(form_data['cdna_concentration'].split(',')[x])
@@ -462,7 +463,12 @@ class DataLogger:
             letter = chr(65 + (reaction_count % 8))
             batch_num_for_amp = (reaction_count // 8) + 1
 
-            row_data[21] = f"APLCXR_{cdna_amp_date}_{batch_num_for_amp}_{letter}"
+            if project == "Aim 4":
+                amp_prefix = "APLCTX"   # TX instead of XR for Aim 4
+            else:
+                amp_prefix = "APLCXR"   # Multiome RNA
+
+            row_data[21] = f"{amp_prefix}_{cdna_amp_date}_{batch_num_for_amp}_{letter}"
             self.counter_data["amp_counter"][amp_date_key] += 1
 
         # Write to Excel
