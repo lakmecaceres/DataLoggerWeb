@@ -183,12 +183,11 @@ class DataLogger:
             slab_list = [s.strip().zfill(2) for s in raw_slab.split(',') if s.strip()]
             if not slab_list:
                 raise ValueError(f"No valid slab numbers provided for {project}")
-            combined_slab_label = "_".join(slab_list)  # e.g., "05_06_07" (padded)
+            combined_slab_label = "_".join(slab_list)  # padded label e.g., "05_06_07"
             slab_count = len(slab_list)
-            # Single slab value (padded) where needed
-            slab = slab_list[0]
+            slab = slab_list[0]  # single value (padded) where needed
         else:
-            # Subcortex + Other: single slab only
+            # Subcortex + Other: single slab only with hemisphere adjustment
             combined_slab_label = None
             slab_count = 1
             slab = raw_slab
@@ -199,16 +198,16 @@ class DataLogger:
             else:
                 slab = slab.zfill(2)
 
-        # Handle tile values
+        # Handle tile values (padded for all non-identifier uses)
         tile_value = form_data['tile'].strip()
         tile = str(int(tile_value)).zfill(2) if tile_value.isdigit() else tile_value
 
-        # Process other fields
+        # Other fields
         tile_location_abbr = form_data['tile_location']
         sort_method = form_data['sort_method']
         sort_method = sort_method.upper() if sort_method.lower() == "dapi" else sort_method
 
-        # FACS population (not strictly used later, retained for clarity)
+        # FACS population (retained for completeness)
         if sort_method.lower() == "pooled":
             facs_population = form_data['facs_population']
         elif sort_method.lower() == "unsorted":
@@ -234,7 +233,7 @@ class DataLogger:
         batches_after = (total_reactions_after + 7) // 8
         new_batches_needed = batches_after - batches_before
 
-        # If next_counter is None (never set by user), use 90 internally (first-time fallback)
+        # If next_counter is None (never set by user), use 90 internally
         if self.counter_data["next_counter"] is None:
             self.counter_data["next_counter"] = 90
 
@@ -257,20 +256,18 @@ class DataLogger:
         date_entry["total_reactions"] = total_reactions_after
         date_entry["batches"] = all_batches
 
-        # Process the indices
+        # Indices
         atac_indices = [self.convert_index(index) for index in form_data['atac_indices'].split(",")] if form_data.get('atac_indices') else []
         atac_indices = [self.pad_index(index) for index in atac_indices]
 
         rna_indices = [self.convert_index(index) for index in form_data['rna_indices'].split(",")] if form_data.get('rna_indices') else []
         rna_indices = [self.pad_index(index) for index in rna_indices]
 
-        # Process each reaction and modality
+        # Prepare rows
         dup_index_counter = {}
         headers = [cell.value for cell in worksheet[1]]
 
-        # Modalities depend on project:
-        # - HMBA_Aim4: RNA only (no ATAC)
-        # - Others (Subcortex, Cortex, Other): RNA + ATAC
+        # Modalities
         if project == "HMBA_Aim4":
             modalities = ["RNA"]
         else:
@@ -282,9 +279,9 @@ class DataLogger:
 
             # Tissue name: Cortex/Aim4 use combined slabs; others single slab
             if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label:
-                slab_for_tissue = combined_slab_label  # e.g., "05_06_07" (padded)
+                slab_for_tissue = combined_slab_label  # padded
             else:
-                slab_for_tissue = slab  # e.g., "05"
+                slab_for_tissue = slab  # padded single
 
             tissue_name_base = f"{donor_name}.{tile_location_abbr}.{slab_for_tissue}.{tile}"
 
@@ -304,7 +301,7 @@ class DataLogger:
                 )
                 current_row += 1
 
-        # Save workbook and counter data
+        # Save
         workbook.save(self.excel_file)
         with open(self.counter_file, 'w') as f:
             json.dump(self.counter_data, f, indent=4)
@@ -316,7 +313,7 @@ class DataLogger:
                             atac_indices, headers, dup_index_counter, donor_name,
                             project=None, combined_slab_label=None, slab_count=1):
 
-        # First column (krienen_lab_identifier): unpadded for slab/tile
+        # First column (krienen_lab_identifier): unpadded slab/tile in the identifier only
         if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label and slab_count > 1:
             # Multi-slab: strip padding in label only
             slab_label_parts = []
@@ -329,13 +326,18 @@ class DataLogger:
         else:
             slab_part = f"Slab{int(slab)}"
 
-        tile_part = f"Tile{int(tile) if tile.isdigit() else tile}"
+        # Tile part: if numeric, include "TileN"; if text, include the text and omit "Tile"
+        if str(tile).isdigit():
+            tile_part = f"Tile{int(tile)}"
+        else:
+            tile_part = tile
 
         krienen_lab_identifier = (
             f"{current_date}_HMBA_{mit_name}_{slab_part}_{tile_part}_{sort_method}_{modality}{x + 1}"
         )
 
-        sorter_initials = form_data['sorter_initials'].strip().upper()
+        # Experimenter initials (use the 'sorter_initials' field)
+        experimenter_initials = form_data['sorter_initials'].strip().upper()
         sorting_status = "PS" if sort_method.lower() in ["pooled", "dapi"] else "PN"
 
         tissue_name = tissue_name_base  # padded values for all other columns
@@ -344,14 +346,21 @@ class DataLogger:
         if project == "HMBA_Aim4":
             dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Rseq'
             enriched_prefix = "MPTX"
+            rna_suffix = "TX"
         else:
             dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Multiome'
             enriched_prefix = "MPXM"
+            rna_suffix = "XR"
 
-        enriched_cell_sample_container_name = f"{enriched_prefix}_{current_date}_{sorting_status}_{sorter_initials}"
-        enriched_cell_sample_name = f'{enriched_prefix}_{current_date}_{sorting_status}_{sorter_initials}_{port_well}'
+        # ATAC suffix (if needed for library sets)
+        atac_suffix = "XA"
 
-        study = "HMBA_CjAtlas_Subcortex" if form_data['project'] == "HMBA_CjAtlas_Subcortex" else form_data.get('project_name', '')
+        # Enriched names include experimenter initials
+        enriched_cell_sample_container_name = f"{enriched_prefix}_{current_date}_{sorting_status}_{experimenter_initials}"
+        enriched_cell_sample_name = f'{enriched_prefix}_{current_date}_{sorting_status}_{experimenter_initials}_{port_well}'
+
+        # Study should equal the selected project value exactly
+        study = form_data.get('project', '')
 
         seq_portal = "no"
         elab_link = form_data.get('elab_link', '')
@@ -364,10 +373,13 @@ class DataLogger:
         if modality == "RNA":
             if project == "HMBA_Aim4":
                 library_method = "10xV4"
-                library_type = "LPLCTX"
+                library_type_suffix = rna_suffix  # "TX"
             else:
                 library_method = "10xMultiome-RSeq"
-                library_type = "LPLCXR"
+                library_type_suffix = rna_suffix  # "XR"
+
+            # Library type prefix must include initials (LP{INITIALS}{SUFFIX})
+            library_type = f"LP{experimenter_initials}{library_type_suffix}"
 
             library_index = rna_indices[x]
 
@@ -383,7 +395,9 @@ class DataLogger:
             library_cycles = int(form_data['library_cycles_rna'].split(',')[x])
         else:  # ATAC
             library_method = "10xMultiome-ASeq"
-            library_type = "LPLCXA"
+            # Library type prefix with initials (LP{INITIALS}XA)
+            library_type = f"LP{experimenter_initials}{atac_suffix}"
+
             library_index = atac_indices[x]
 
             atac_concentration = float(form_data['atac_lib_concentration'].split(',')[x])
@@ -399,7 +413,7 @@ class DataLogger:
             cdna_pcr_cycles = None
             rna_size = None
 
-        # Update library prep set counter
+        # Update library prep set counter (include experimenter initials)
         key = (library_type, library_prep_date, library_index)
         dup_index_counter[key] = dup_index_counter.get(key, 0) + 1
         library_prep_set = f"{library_type}_{library_prep_date}_{dup_index_counter[key]}"
@@ -431,7 +445,7 @@ class DataLogger:
             enriched_cell_sample_quantity_count,
             barcoded_cell_sample_name,
             library_method,
-            "10xMultiome-RSeq" if modality == "RNA" else None,  # kept as original
+            "10xMultiome-RSeq" if modality == "RNA" else None,  # cDNA_amplification_method (kept as original)
             self.convert_date(form_data['cdna_amp_date']) if modality == "RNA" else None,
             None,  # amplified_cdna_name (filled later for RNA)
             cdna_pcr_cycles if modality == "RNA" else None,
@@ -451,7 +465,7 @@ class DataLogger:
             f"SI-NA-{atac_indices[x]}" if modality == "ATAC" else None
         ]
 
-        # Handle amplified_cdna_name for RNA
+        # Handle amplified_cdna_name for RNA (include experimenter initials)
         if modality == "RNA":
             cdna_amp_date = self.convert_date(form_data['cdna_amp_date'])
             amp_date_key = f"amp_{cdna_amp_date}"
@@ -463,11 +477,10 @@ class DataLogger:
             letter = chr(65 + (reaction_count % 8))
             batch_num_for_amp = (reaction_count // 8) + 1
 
-            if project == "HMBA_Aim4":
-                amp_prefix = "APLCTX"
-            else:
-                amp_prefix = "APLCXR"
+            # Amplification name prefix AP{INITIALS}{SUFFIX}
+            amp_prefix = f"AP{experimenter_initials}{rna_suffix}"
 
+            # amplified_cdna_name matches your example APRNXR_230714_1_A (prefix_date_batch_letter)
             row_data[21] = f"{amp_prefix}_{cdna_amp_date}_{batch_num_for_amp}_{letter}"
             self.counter_data["amp_counter"][amp_date_key] += 1
 
