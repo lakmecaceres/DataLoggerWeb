@@ -121,12 +121,6 @@ class DataLogger:
             return f"{index[0]}0{index[1]}"
         return index
 
-    def get_current_time(self):
-        return "2025-06-27 17:20:02"
-
-    def get_current_user(self):
-        return "lakmecaceres"
-
     def initialize_excel(self):
         wb = Workbook()
         ws = wb.active
@@ -147,7 +141,6 @@ class DataLogger:
 
         ws.append(headers)
 
-        # Apply bold style to headers
         for col_num, header in enumerate(headers, start=1):
             cell = ws.cell(row=1, column=col_num)
             cell.font = Font(name="Arial", size=10, bold=True)
@@ -185,17 +178,17 @@ class DataLogger:
         raw_slab = form_data['slab'].strip()
         hemisphere = form_data['hemisphere'].split()[0].upper()
 
-        if project == "HMBA_CjAtlas_Cortex":
-            # Cortex: allow comma-separated slabs, e.g. "5,6,7"
+        if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"}:
+            # Cortex and Aim4: allow multiple slabs (comma-separated)
             slab_list = [s.strip().zfill(2) for s in raw_slab.split(',') if s.strip()]
             if not slab_list:
-                raise ValueError("No valid slab numbers provided for HMBA_CjAtlas_Cortex")
-            combined_slab_label = "_".join(slab_list)  # e.g. "05_06_07"
+                raise ValueError(f"No valid slab numbers provided for {project}")
+            combined_slab_label = "_".join(slab_list)  # e.g., "05_06_07" (padded)
             slab_count = len(slab_list)
-            # Use first slab where a single numeric slab is needed
+            # Single slab value (padded) where needed
             slab = slab_list[0]
         else:
-            # Subcortex + Aim 4 + Other: single slab only
+            # Subcortex + Other: single slab only
             combined_slab_label = None
             slab_count = 1
             slab = raw_slab
@@ -208,17 +201,14 @@ class DataLogger:
 
         # Handle tile values
         tile_value = form_data['tile'].strip()
-        if tile_value.isdigit():
-            tile = str(int(tile_value)).zfill(2)
-        else:
-            tile = tile_value
+        tile = str(int(tile_value)).zfill(2) if tile_value.isdigit() else tile_value
 
         # Process other fields
         tile_location_abbr = form_data['tile_location']
         sort_method = form_data['sort_method']
         sort_method = sort_method.upper() if sort_method.lower() == "dapi" else sort_method
 
-        # FACS population
+        # FACS population (not strictly used later, retained for clarity)
         if sort_method.lower() == "pooled":
             facs_population = form_data['facs_population']
         elif sort_method.lower() == "unsorted":
@@ -244,8 +234,7 @@ class DataLogger:
         batches_after = (total_reactions_after + 7) // 8
         new_batches_needed = batches_after - batches_before
 
-        # If next_counter is still None (never set by user), we still need a starting P number.
-        # Use 90 as an internal default, and then increment from there.
+        # If next_counter is None (never set by user), use 90 internally (first-time fallback)
         if self.counter_data["next_counter"] is None:
             self.counter_data["next_counter"] = 90
 
@@ -268,20 +257,20 @@ class DataLogger:
         date_entry["total_reactions"] = total_reactions_after
         date_entry["batches"] = all_batches
 
-        # Process indices
+        # Process the indices
         atac_indices = [self.convert_index(index) for index in form_data['atac_indices'].split(",")] if form_data.get('atac_indices') else []
         atac_indices = [self.pad_index(index) for index in atac_indices]
 
         rna_indices = [self.convert_index(index) for index in form_data['rna_indices'].split(",")] if form_data.get('rna_indices') else []
         rna_indices = [self.pad_index(index) for index in rna_indices]
 
-        # Process the data for each reaction and modality
+        # Process each reaction and modality
         dup_index_counter = {}
         headers = [cell.value for cell in worksheet[1]]
 
         # Modalities depend on project:
         # - HMBA_Aim4: RNA only (no ATAC)
-        # - All others (Subcortex, Cortex, Other): RNA + ATAC
+        # - Others (Subcortex, Cortex, Other): RNA + ATAC
         if project == "HMBA_Aim4":
             modalities = ["RNA"]
         else:
@@ -291,11 +280,11 @@ class DataLogger:
             p_number, port_well = port_wells[x]
             barcoded_cell_sample_name = f'P{str(p_number).zfill(4)}_{port_well}'
 
-            # For Cortex, tissue_name uses combined slabs with underscores; others use single slab
-            if project == "HMBA_CjAtlas_Cortex" and combined_slab_label:
-                slab_for_tissue = combined_slab_label  # e.g. "05_06_07"
+            # Tissue name: Cortex/Aim4 use combined slabs; others single slab
+            if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label:
+                slab_for_tissue = combined_slab_label  # e.g., "05_06_07" (padded)
             else:
-                slab_for_tissue = slab               # e.g. "05"
+                slab_for_tissue = slab  # e.g., "05"
 
             tissue_name_base = f"{donor_name}.{tile_location_abbr}.{slab_for_tissue}.{tile}"
 
@@ -327,12 +316,17 @@ class DataLogger:
                             atac_indices, headers, dup_index_counter, donor_name,
                             project=None, combined_slab_label=None, slab_count=1):
 
-        # Create krienen_lab_identifier
-        if project == "HMBA_CjAtlas_Cortex" and combined_slab_label and slab_count > 1:
-            # Example: 251118_HMBA_cjMorel_Slabs_05_06_07_Tile22_...
-            slab_part = f"Slabs_{combined_slab_label}"
+        # First column (krienen_lab_identifier): unpadded for slab/tile
+        if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label and slab_count > 1:
+            # Multi-slab: strip padding in label only
+            slab_label_parts = []
+            for s in combined_slab_label.split('_'):
+                try:
+                    slab_label_parts.append(str(int(s)))  # "05" -> "5"
+                except ValueError:
+                    slab_label_parts.append(s)
+            slab_part = f"Slabs_{'_'.join(slab_label_parts)}"
         else:
-            # Single slab: standard "SlabNN"
             slab_part = f"Slab{int(slab)}"
 
         tile_part = f"Tile{int(tile) if tile.isdigit() else tile}"
@@ -344,21 +338,20 @@ class DataLogger:
         sorter_initials = form_data['sorter_initials'].strip().upper()
         sorting_status = "PS" if sort_method.lower() in ["pooled", "dapi"] else "PN"
 
-        tissue_name = tissue_name_base
+        tissue_name = tissue_name_base  # padded values for all other columns
 
         # HMBA_Aim4 uses Rseq-only naming and TX prefix; others use Multiome + XM
         if project == "HMBA_Aim4":
             dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Rseq'
-            enriched_prefix = "MPTX"  # TX for RNAseq-only
+            enriched_prefix = "MPTX"
         else:
             dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Multiome'
-            enriched_prefix = "MPXM"  # XM for Multiome
+            enriched_prefix = "MPXM"
 
         enriched_cell_sample_container_name = f"{enriched_prefix}_{current_date}_{sorting_status}_{sorter_initials}"
         enriched_cell_sample_name = f'{enriched_prefix}_{current_date}_{sorting_status}_{sorter_initials}_{port_well}'
 
-        study = "HMBA_CjAtlas_Subcortex" if form_data['project'] == "HMBA_CjAtlas_Subcortex" else form_data.get(
-            'project_name', '')
+        study = "HMBA_CjAtlas_Subcortex" if form_data['project'] == "HMBA_CjAtlas_Subcortex" else form_data.get('project_name', '')
 
         seq_portal = "no"
         elab_link = form_data.get('elab_link', '')
@@ -369,13 +362,12 @@ class DataLogger:
                              else self.convert_date(form_data['atac_prep_date']))
 
         if modality == "RNA":
-            # Library method + type differ for HMBA_Aim4
             if project == "HMBA_Aim4":
                 library_method = "10xV4"
-                library_type = "LPLCTX"   # TX instead of XR for Aim 4
+                library_type = "LPLCTX"
             else:
                 library_method = "10xMultiome-RSeq"
-                library_type = "LPLCXR"   # Multiome RNA
+                library_type = "LPLCXR"
 
             library_index = rna_indices[x]
 
@@ -400,7 +392,6 @@ class DataLogger:
             atac_size = int(form_data['atac_sizes'].split(',')[x])
             library_cycles = int(form_data['library_cycles_atac'].split(',')[x])
 
-            # RNA-only values not used for ATAC
             cdna_concentration = None
             cdna_amplified_quantity = None
             cdna_library_input = None
@@ -440,7 +431,7 @@ class DataLogger:
             enriched_cell_sample_quantity_count,
             barcoded_cell_sample_name,
             library_method,
-            "10xMultiome-RSeq" if modality == "RNA" else None,  # cDNA_amplification_method (kept as original)
+            "10xMultiome-RSeq" if modality == "RNA" else None,  # kept as original
             self.convert_date(form_data['cdna_amp_date']) if modality == "RNA" else None,
             None,  # amplified_cdna_name (filled later for RNA)
             cdna_pcr_cycles if modality == "RNA" else None,
@@ -473,9 +464,9 @@ class DataLogger:
             batch_num_for_amp = (reaction_count // 8) + 1
 
             if project == "HMBA_Aim4":
-                amp_prefix = "APLCTX"   # TX instead of XR for Aim 4
+                amp_prefix = "APLCTX"
             else:
-                amp_prefix = "APLCXR"   # Multiome RNA
+                amp_prefix = "APLCXR"
 
             row_data[21] = f"{amp_prefix}_{cdna_amp_date}_{batch_num_for_amp}_{letter}"
             self.counter_data["amp_counter"][amp_date_key] += 1

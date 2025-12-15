@@ -624,11 +624,11 @@
             }
 
             // Slab placeholder / rules:
-            if (projectSelect.value === 'HMBA_CjAtlas_Cortex') {
-                // Cortex: allow multi-slab (backend handles comma-separated list)
+            if (projectSelect.value === 'HMBA_CjAtlas_Cortex' || projectSelect.value === 'HMBA_Aim4') {
+                // Cortex & Aim4: allow multi-slab (backend handles comma-separated list)
                 slabInput.placeholder = 'Enter numeric or comma-separated values (e.g., 9,10,11)';
             } else {
-                // HMBA_Aim4 + Subcortex + Other: single slab only
+                // Subcortex + Other: single slab only
                 if (slabInput.value.includes(',')) {
                     slabInput.value = slabInput.value.split(',')[0].trim();
                 }
@@ -732,49 +732,6 @@
                 alert('Error updating counter. Please try again.');
                 loadCounterBadge();
             });
-        }
-
-        // eLab link paste functionality
-        async function pasteElabLink() {
-            const button = document.querySelector('.paste-btn');
-            const input = document.getElementById('elab_link');
-
-            try {
-                button.textContent = '⏳';
-                button.disabled = true;
-
-                const text = await navigator.clipboard.readText();
-                input.value = text.trim();
-
-                input.readOnly = false;
-                input.classList.add('elab-editable');
-
-                button.textContent = '✅';
-                button.style.backgroundColor = '#107c10';
-
-                saveFormData();
-
-                setTimeout(() => {
-                    button.textContent = '📋 Paste';
-                    button.style.backgroundColor = '#0078d7';
-                    button.disabled = false;
-                }, 2000);
-
-            } catch (err) {
-                button.textContent = '❌';
-                button.style.backgroundColor = '#d13438';
-
-                alert('Clipboard access denied. Please manually copy and paste the link into the field.');
-                input.readOnly = false;
-                input.classList.add('elab-editable');
-                input.placeholder = 'Manually paste your eLab link here';
-
-                setTimeout(() => {
-                    button.textContent = '📋 Paste';
-                    button.style.backgroundColor = '#0078d7';
-                    button.disabled = false;
-                }, 3000);
-            }
         }
 
         // Download Excel
@@ -978,8 +935,8 @@
                 }
             });
 
-            // Enforce slab rule at submit time (only Cortex can have multi-slab)
-            if (formData.project !== 'HMBA_CjAtlas_Cortex' && formData.slab) {
+            // Enforce slab rule at submit time (Cortex and Aim4 can have multi-slab)
+            if (formData.project !== 'HMBA_CjAtlas_Cortex' && formData.project !== 'HMBA_Aim4' && formData.slab) {
                 if (formData.slab.includes(',')) {
                     formData.slab = formData.slab.split(',')[0].trim();
                 }
@@ -1041,12 +998,12 @@
             slabInput.addEventListener('input', function () {
                 const project = projectSelect.value;
 
-                if (project === 'HMBA_CjAtlas_Cortex') {
-                    // Allow commas for Cortex
+                if (project === 'HMBA_CjAtlas_Cortex' || project === 'HMBA_Aim4') {
+                    // Allow commas for Cortex & Aim4
                     return;
                 }
 
-                // For non-Cortex projects, strip commas and anything after
+                // For non-Cortex/Aim4 projects, strip commas and anything after
                 if (this.value.includes(',')) {
                     this.value = this.value.split(',')[0].trim();
                 }
