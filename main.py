@@ -85,6 +85,7 @@ class DataLogger:
 
         # None means: user has never explicitly set the chip number in this environment
         self.counter_data.setdefault("next_counter", None)
+        # Store chip usage per date: { "YYMMDD": { "chips": { "121": 3, "122": 8, ... } } }
         self.counter_data.setdefault("date_info", {})
         self.counter_data.setdefault("amp_counter", {})
 
@@ -217,44 +218,43 @@ class DataLogger:
 
         rxn_number = int(form_data['rxn_number'])
 
-        # Update counters
+        # Initialize per-date chip usage
         if current_date not in self.counter_data["date_info"]:
-            self.counter_data["date_info"][current_date] = {
-                "total_reactions": 0,
-                "batches": []
-            }
+            self.counter_data["date_info"][current_date] = {"chips": {}}
+        chips_map = self.counter_data["date_info"][current_date]["chips"]  # str chip -> used_wells
 
-        date_info = self.counter_data["date_info"]
-        date_entry = date_info[current_date]
-        existing_total = date_entry["total_reactions"]
-
-        total_reactions_after = existing_total + rxn_number
-        batches_before = (existing_total + 7) // 8
-        batches_after = (total_reactions_after + 7) // 8
-        new_batches_needed = batches_after - batches_before
-
-        # If next_counter is None (never set by user), use 90 internally
+        # Determine starting chip for THIS submission
         if self.counter_data["next_counter"] is None:
+            # First-time fallback; user should set via /update_counter, but keep a default
             self.counter_data["next_counter"] = 90
 
-        new_p_numbers = [self.counter_data["next_counter"] + i for i in range(new_batches_needed)]
-        self.counter_data["next_counter"] += new_batches_needed
+        start_chip = int(self.counter_data["next_counter"])
+        chip = start_chip
+        used = int(chips_map.get(str(chip), 0))
 
-        all_batches = date_entry["batches"].copy()
-        all_batches.extend({"p_number": p, "count": 0} for p in new_p_numbers)
+        # Allocate wells across chips for this submission
+        assignments = []  # list of (chip, well)
+        updates = {}      # chip -> final used_wells
+        for _ in range(rxn_number):
+            if used == 8:
+                updates[str(chip)] = used  # persist full chip
+                chip += 1
+                used = int(chips_map.get(str(chip), 0))
+            used += 1
+            assignments.append((chip, used))
+            updates[str(chip)] = used
 
-        # Calculate port wells
-        port_wells = []
-        for x in range(rxn_number):
-            global_idx = existing_total + x + 1
-            batch_idx = (global_idx - 1) // 8
-            p_number = all_batches[batch_idx]["p_number"]
-            port_well = (global_idx - 1) % 8 + 1
-            port_wells.append((p_number, port_well))
+        # Persist chip usage for this date
+        chips_map.update(updates)
 
-        # Update counters
-        date_entry["total_reactions"] = total_reactions_after
-        date_entry["batches"] = all_batches
+        # Update next_counter badge:
+        # - If last chip is full, advance to next chip
+        # - Else stay on current chip to allow continuation for this date
+        last_chip, last_used = assignments[-1]
+        if last_used == 8:
+            self.counter_data["next_counter"] = last_chip + 1
+        else:
+            self.counter_data["next_counter"] = last_chip
 
         # Indices
         atac_indices = [self.convert_index(index) for index in form_data['atac_indices'].split(",")] if form_data.get('atac_indices') else []
@@ -263,7 +263,7 @@ class DataLogger:
         rna_indices = [self.convert_index(index) for index in form_data['rna_indices'].split(",")] if form_data.get('rna_indices') else []
         rna_indices = [self.pad_index(index) for index in rna_indices]
 
-        # Prepare rows
+        # Process rows
         dup_index_counter = {}
         headers = [cell.value for cell in worksheet[1]]
 
@@ -274,7 +274,7 @@ class DataLogger:
             modalities = ["RNA", "ATAC"]
 
         for x in range(rxn_number):
-            p_number, port_well = port_wells[x]
+            p_number, port_well = assignments[x]
             barcoded_cell_sample_name = f'P{str(p_number).zfill(4)}_{port_well}'
 
             # Tissue name: Cortex/Aim4 use combined slabs; others single slab
@@ -352,7 +352,7 @@ class DataLogger:
             enriched_prefix = "MPXM"
             rna_suffix = "XR"
 
-        # ATAC suffix (if needed for library sets)
+        # ATAC suffix (if used in library sets)
         atac_suffix = "XA"
 
         # Enriched names include experimenter initials
@@ -378,7 +378,7 @@ class DataLogger:
                 library_method = "10xMultiome-RSeq"
                 library_type_suffix = rna_suffix  # "XR"
 
-            # Library type prefix must include initials (LP{INITIALS}{SUFFIX})
+            # Library type includes initials: LP{INITIALS}{SUFFIX}
             library_type = f"LP{experimenter_initials}{library_type_suffix}"
 
             library_index = rna_indices[x]
@@ -395,7 +395,7 @@ class DataLogger:
             library_cycles = int(form_data['library_cycles_rna'].split(',')[x])
         else:  # ATAC
             library_method = "10xMultiome-ASeq"
-            # Library type prefix with initials (LP{INITIALS}XA)
+            # Library type includes initials: LP{INITIALS}XA
             library_type = f"LP{experimenter_initials}{atac_suffix}"
 
             library_index = atac_indices[x]
@@ -413,7 +413,7 @@ class DataLogger:
             cdna_pcr_cycles = None
             rna_size = None
 
-        # Update library prep set counter (include experimenter initials)
+        # Update library prep set counter (include experimenter initials via library_type)
         key = (library_type, library_prep_date, library_index)
         dup_index_counter[key] = dup_index_counter.get(key, 0) + 1
         library_prep_set = f"{library_type}_{library_prep_date}_{dup_index_counter[key]}"
@@ -445,7 +445,9 @@ class DataLogger:
             enriched_cell_sample_quantity_count,
             barcoded_cell_sample_name,
             library_method,
-            "10xMultiome-RSeq" if modality == "RNA" else None,  # cDNA_amplification_method (kept as original)
+            # cDNA_amplification_method: Aim4 -> "10xV4"; others RNA -> "10xMultiome-RSeq"; ATAC -> None
+            ("10xV4" if (modality == "RNA" and project == "HMBA_Aim4")
+             else "10xMultiome-RSeq" if modality == "RNA" else None),
             self.convert_date(form_data['cdna_amp_date']) if modality == "RNA" else None,
             None,  # amplified_cdna_name (filled later for RNA)
             cdna_pcr_cycles if modality == "RNA" else None,
@@ -477,10 +479,9 @@ class DataLogger:
             letter = chr(65 + (reaction_count % 8))
             batch_num_for_amp = (reaction_count // 8) + 1
 
-            # Amplification name prefix AP{INITIALS}{SUFFIX}
+            # Amplification name prefix AP{INITIALS}{SUFFIX}, e.g., APRNXR_230714_1_A
             amp_prefix = f"AP{experimenter_initials}{rna_suffix}"
 
-            # amplified_cdna_name matches your example APRNXR_230714_1_A (prefix_date_batch_letter)
             row_data[21] = f"{amp_prefix}_{cdna_amp_date}_{batch_num_for_amp}_{letter}"
             self.counter_data["amp_counter"][amp_date_key] += 1
 
@@ -578,7 +579,7 @@ def update_counter():
         return jsonify({'success': False, 'error': str(e)})
 
 
-# Debug endpoints (optional; remove later if you don't want them exposed)
+# Optional debug endpoints
 @app.route('/debug/counter')
 def debug_counter():
     try:
