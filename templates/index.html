@@ -324,6 +324,22 @@
     </div>
 
     <script>
+        // Prompt immediately on load (before DOM) to guarantee it shows
+        (function immediateUserPrompt() {
+            try {
+                let name = localStorage.getItem('user_first_name');
+                if (!name || !name.trim()) {
+                    name = prompt('Enter your first name (used to name your Excel file):', '');
+                    if (name && name.trim()) {
+                        localStorage.setItem('user_first_name', name.trim());
+                    }
+                }
+            } catch (e) {
+                // Ignore storage errors; user will be prompted again later by validateForm
+                console.warn('User name prompt/storage error:', e);
+            }
+        })();
+
         // Tab functionality
         function showTab(tabName) {
             const tabContents = document.querySelectorAll('.tab-content');
@@ -332,20 +348,6 @@
             tabs.forEach(tab => tab.classList.remove('active'));
             document.getElementById(tabName).classList.add('active');
             event.target.classList.add('active');
-        }
-
-        // Prompt for first name on first load and persist in localStorage
-        function ensureUserFirstName() {
-            let name = localStorage.getItem('user_first_name');
-            while (!name || !name.trim()) {
-                name = prompt('Enter your first name (used to name your Excel file):', '');
-                if (name === null) break; // allow cancel, re-prompt next time
-            }
-            if (name && name.trim()) {
-                name = name.trim();
-                localStorage.setItem('user_first_name', name);
-            }
-            setUserNameField();
         }
 
         function setUserNameField() {
@@ -401,7 +403,7 @@
 
             if (sortMethod === 'pooled') {
                 facsPopulation.disabled = false;
-                facsPopulation.placeholder = 'Format: XX/XX/XX (e.g., 70/20/10)';
+                facs_population.placeholder = 'Format: XX/XX/XX (e.g., 70/20/10)';
                 facsPopulation.value = '';
             } else if (sortMethod === 'unsorted') {
                 facsPopulation.disabled = true;
@@ -410,7 +412,6 @@
                 facsPopulation.disabled = true;
                 facsPopulation.value = 'DAPI';
             }
-
             saveFormData();
         }
 
@@ -600,7 +601,7 @@
                 }
             });
 
-            // Slab rule: only Cortex & Aim4 allow multi-slab
+            // Only Cortex/Aim4 allow multi-slab
             if (formData.project !== 'HMBA_CjAtlas_Cortex' && formData.project !== 'HMBA_Aim4' && formData.slab) {
                 if (formData.slab.includes(',')) {
                     formData.slab = formData.slab.split(',')[0].trim();
@@ -642,12 +643,9 @@
 
         // Init
         document.addEventListener('DOMContentLoaded', function() {
-            ensureUserFirstName();
             setUserNameField();
-
             loadCounterBadge();
             loadFormData();
-
             updateAtacFieldsForProject();
             toggleProjectName();
 
