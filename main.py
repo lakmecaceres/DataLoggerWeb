@@ -1,12 +1,19 @@
 from flask import Flask, render_template, request, jsonify, send_file
 import os
+import io
+import re
 import json
 from datetime import datetime
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl import Workbook, load_workbook
-from openpyxl.utils import get_column_letter
 import dateutil.parser
+
+# Optional GCS support
+GCS_BUCKET = os.getenv("GCS_BUCKET", "").strip()
+GCS_ENABLED = bool(GCS_BUCKET)
+if GCS_ENABLED:
+    from google.cloud import storage
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'marmoset'
@@ -14,10 +21,13 @@ app.config['SECRET_KEY'] = 'marmoset'
 
 class DataLogger:
     def __init__(self):
+        # Local storage (fallback when GCS not enabled)
         self.config_dir = os.path.join(os.path.expanduser('~'), 'DataLogApp')
         os.makedirs(self.config_dir, exist_ok=True)
         self.counter_file = os.path.join(self.config_dir, 'sample_name_counter.json')
-        self.excel_file = os.path.join(self.config_dir, 'krienen_data_log.xlsx')
+
+        # GCS client
+        self.storage_client = storage.Client() if GCS_ENABLED else None
 
         self.name_to_code = {
             "Petra": "CJ23.56.001",
@@ -61,17 +71,121 @@ class DataLogger:
             "Lapras": "CJ25.56.017"
         }
 
-        self.tile_location_map = {
-            "BRAINSTEM": "BS",
-            "BS": "BS",
-            "CORTEX": "CX",
-            "CX": "CX",
-            "CEREBELLUM": "CB",
-            "CB": "CB"
-        }
-
         self.black_fill = PatternFill(start_color='000000', fill_type='solid')
         self.load_counter_data()
+
+    # ----------------- Helpers: user key and object names -----------------
+
+    def _safe_user_key(self, name: str) -> str:
+        # allow letters, numbers, underscore, dash; fallback to "unknown" if empty
+        name = (name or "").strip()
+        if not name:
+            return "unknown"
+        key = re.sub(r'[^A-Za-z0-9_-]+', '_', name)
+        return key or "unknown"
+
+    def _new_object_name(self, user_key: str) -> str:
+        ts = datetime.now().strftime('%YMMDD_%H%M%S')  # keep consistent sortable naming
+        # File per user, include user name in file name
+        return f"logs/{user_key}/{user_key}_krienen_data_log_{ts}.xlsx"
+
+    # ----------------- Workbook storage helpers (GCS/local) -----------------
+
+    def _load_pointer(self, user_key: str):
+        # Try GCS pointer first
+        if GCS_ENABLED:
+            bucket = self.storage_client.bucket(GCS_BUCKET)
+            blob = bucket.blob(f"pointers/{user_key}.json")
+            if blob.exists():
+                try:
+                    data = json.loads(blob.download_as_text())
+                    if isinstance(data, dict) and "object" in data and data["object"]:
+                        return data["object"]
+                except Exception:
+                    pass
+        # Fallback to local pointer
+        mapping = self.counter_data.get("current_log_objects", {})
+        return mapping.get(user_key)
+
+    def _save_pointer(self, user_key: str, object_name: str):
+        # Save both to GCS and local fallback
+        if GCS_ENABLED:
+            bucket = self.storage_client.bucket(GCS_BUCKET)
+            blob = bucket.blob(f"pointers/{user_key}.json")
+            blob.upload_from_string(json.dumps({"object": object_name}, indent=2), content_type="application/json")
+        if "current_log_objects" not in self.counter_data:
+            self.counter_data["current_log_objects"] = {}
+        self.counter_data["current_log_objects"][user_key] = object_name
+        with open(self.counter_file, 'w') as f:
+            json.dump(self.counter_data, f, indent=4)
+
+    def _download_workbook(self, object_name):
+        # Returns (workbook, generation_or_None)
+        if GCS_ENABLED:
+            bucket = self.storage_client.bucket(GCS_BUCKET)
+            blob = bucket.blob(object_name)
+            if blob.exists():
+                data = blob.download_as_bytes()
+                wb = load_workbook(io.BytesIO(data))
+                return wb, blob.generation
+            else:
+                wb = self._initialize_excel()
+                return wb, None
+        else:
+            local_path = os.path.join(self.config_dir, object_name.replace("/", os.sep))
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            if os.path.exists(local_path):
+                wb = load_workbook(local_path)
+            else:
+                wb = self._initialize_excel()
+            return wb, None
+
+    def _upload_workbook(self, wb, object_name, if_generation_match=None):
+        if GCS_ENABLED:
+            bucket = self.storage_client.bucket(GCS_BUCKET)
+            blob = bucket.blob(object_name)
+            out = io.BytesIO()
+            wb.save(out)
+            out.seek(0)
+            if if_generation_match is not None:
+                blob.upload_from_file(
+                    out,
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    if_generation_match=if_generation_match
+                )
+            else:
+                blob.upload_from_file(
+                    out,
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+        else:
+            local_path = os.path.join(self.config_dir, object_name.replace("/", os.sep))
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            wb.save(local_path)
+
+    def _download_workbook_bytes(self, object_name):
+        if GCS_ENABLED:
+            bucket = self.storage_client.bucket(GCS_BUCKET)
+            blob = bucket.blob(object_name)
+            if blob.exists():
+                return blob.download_as_bytes()
+            else:
+                wb = self._initialize_excel()
+                out = io.BytesIO()
+                wb.save(out)
+                return out.getvalue()
+        else:
+            local_path = os.path.join(self.config_dir, object_name.replace("/", os.sep))
+            if os.path.exists(local_path):
+                with open(local_path, 'rb') as f:
+                    return f.read()
+            else:
+                wb = self._initialize_excel()
+                out = io.BytesIO()
+                wb.save(out)
+                return out.getvalue()
+
+    # ----------------- Core utilities -----------------
 
     def load_counter_data(self):
         if os.path.exists(self.counter_file):
@@ -83,23 +197,50 @@ class DataLogger:
         else:
             self.counter_data = {}
 
-        # None means: user has never explicitly set the chip number in this environment
         self.counter_data.setdefault("next_counter", None)
-        # Store chip usage per date: { "YYMMDD": { "chips": { "121": 3, "122": 8, ... } } }
+        # Per-date chip usage map to support continuing chip only for same date
         self.counter_data.setdefault("date_info", {})
+        # Amplification date counters (batch/letter naming)
         self.counter_data.setdefault("amp_counter", {})
+        # Pointer mapping per user for local fallback
+        self.counter_data.setdefault("current_log_objects", {})
+
+    def _headers(self):
+        return ['krienen_lab_identifier', 'seq_portal', 'elab_link', 'experiment_start_date',
+                'mit_name', 'donor_name', 'tissue_name', 'tissue_name_old',
+                'dissociated_cell_sample_name', 'facs_population_plan', 'cell_prep_type',
+                'study', 'enriched_cell_sample_container_name', 'expc_cell_capture',
+                'port_well', 'enriched_cell_sample_name', 'enriched_cell_sample_quantity_count',
+                'barcoded_cell_sample_name', 'library_method', 'cDNA_amplification_method',
+                'cDNA_amplification_date', 'amplified_cdna_name', 'cDNA_pcr_cycles',
+                'rna_amplification_pass_fail', 'percent_cdna_longer_than_400bp',
+                'cdna_amplified_quantity_ng', 'cDNA_library_input_ng', 'library_creation_date',
+                'library_prep_set', 'library_name', 'tapestation_avg_size_bp',
+                'library_num_cycles', 'lib_quantification_ng', 'library_prep_pass_fail',
+                'r1_index', 'r2_index', 'ATAC_index']
+
+    def _initialize_excel(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "HMBA"
+        ws.append(self._headers())
+        for col_num in range(1, len(self._headers()) + 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.font = Font(name="Arial", size=10, bold=True)
+            cell.alignment = Alignment(horizontal='left')
+        return wb
 
     def convert_date(self, exp_date):
-        clean_date = "".join(c for c in exp_date if c.isdigit())
-        if len(clean_date) == 6:
+        clean = "".join(c for c in exp_date if c.isdigit())
+        if len(clean) == 6:
             try:
-                datetime.strptime(clean_date, '%y%m%d')
-                return clean_date
+                datetime.strptime(clean, '%y%m%d')
+                return clean
             except ValueError:
                 pass
         try:
-            parsed_date = dateutil.parser.parse(exp_date)
-            return parsed_date.strftime('%y%m%d')
+            parsed = dateutil.parser.parse(exp_date)
+            return parsed.strftime('%y%m%d')
         except ValueError:
             return None
 
@@ -122,73 +263,49 @@ class DataLogger:
             return f"{index[0]}0{index[1]}"
         return index
 
-    def initialize_excel(self):
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "HMBA"
-
-        headers = ['krienen_lab_identifier', 'seq_portal', 'elab_link', 'experiment_start_date',
-                   'mit_name', 'donor_name', 'tissue_name', 'tissue_name_old',
-                   'dissociated_cell_sample_name', 'facs_population_plan', 'cell_prep_type',
-                   'study', 'enriched_cell_sample_container_name', 'expc_cell_capture',
-                   'port_well', 'enriched_cell_sample_name', 'enriched_cell_sample_quantity_count',
-                   'barcoded_cell_sample_name', 'library_method', 'cDNA_amplification_method',
-                   'cDNA_amplification_date', 'amplified_cdna_name', 'cDNA_pcr_cycles',
-                   'rna_amplification_pass_fail', 'percent_cdna_longer_than_400bp',
-                   'cdna_amplified_quantity_ng', 'cDNA_library_input_ng', 'library_creation_date',
-                   'library_prep_set', 'library_name', 'tapestation_avg_size_bp',
-                   'library_num_cycles', 'lib_quantification_ng', 'library_prep_pass_fail',
-                   'r1_index', 'r2_index', 'ATAC_index']
-
-        ws.append(headers)
-
-        for col_num, header in enumerate(headers, start=1):
-            cell = ws.cell(row=1, column=col_num)
-            cell.font = Font(name="Arial", size=10, bold=True)
-            cell.alignment = Alignment(horizontal='left')
-
-        return wb
+    # ----------------- Business logic -----------------
 
     def process_form_data(self, form_data):
-        # Load or create workbook
-        if os.path.exists(self.excel_file):
-            workbook = load_workbook(self.excel_file)
-        else:
-            workbook = self.initialize_excel()
+        # Resolve user name (first name) and user key
+        user_first_name = (form_data.get('user_first_name') or "").strip()
+        user_key = self._safe_user_key(user_first_name)
 
-        worksheet = workbook.active
+        # Ensure we have a current per-user log object (file named by creation time and user)
+        object_name = self._load_pointer(user_key)
+        if not object_name:
+            object_name = self._new_object_name(user_key)
+            self._save_pointer(user_key, object_name)
 
-        # Find the last row with content
+        # Load the workbook (with GCS generation for concurrency)
+        wb, generation = self._download_workbook(object_name)
+        ws = wb.active  # Single "HMBA" sheet
+
+        # Find last row with content
         last_row_with_content = 1
-        for row_idx in range(1, worksheet.max_row + 1):
-            row_has_content = any(cell.value is not None for cell in worksheet[row_idx])
-            if row_has_content:
+        for row_idx in range(1, ws.max_row + 1):
+            if any(cell.value is not None for cell in ws[row_idx]):
                 last_row_with_content = row_idx
-
         current_row = last_row_with_content + 1
 
-        # Process form data
+        # Parse form inputs
         current_date = self.convert_date(form_data['date'])
         mit_name_input = form_data['marmoset']
         mit_name = "cj" + mit_name_input
         donor_name = self.name_to_code[mit_name_input]
-
         project = form_data.get('project', '')
 
-        # Process slab and hemisphere
         raw_slab = form_data['slab'].strip()
         hemisphere = form_data['hemisphere'].split()[0].upper()
 
+        # Multi-slab for Cortex & Aim4
         if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"}:
-            # Cortex and Aim4: allow multiple slabs (comma-separated)
             slab_list = [s.strip().zfill(2) for s in raw_slab.split(',') if s.strip()]
             if not slab_list:
                 raise ValueError(f"No valid slab numbers provided for {project}")
-            combined_slab_label = "_".join(slab_list)  # padded label e.g., "05_06_07"
+            combined_slab_label = "_".join(slab_list)
             slab_count = len(slab_list)
-            slab = slab_list[0]  # single value (padded) where needed
+            slab = slab_list[0]  # first slab (padded) for single-value fields
         else:
-            # Subcortex + Other: single slab only with hemisphere adjustment
             combined_slab_label = None
             slab_count = 1
             slab = raw_slab
@@ -199,16 +316,15 @@ class DataLogger:
             else:
                 slab = slab.zfill(2)
 
-        # Handle tile values (padded for all non-identifier uses)
+        # Tile padded elsewhere; first-column identifier will handle text tiles specially
         tile_value = form_data['tile'].strip()
         tile = str(int(tile_value)).zfill(2) if tile_value.isdigit() else tile_value
 
-        # Other fields
         tile_location_abbr = form_data['tile_location']
         sort_method = form_data['sort_method']
         sort_method = sort_method.upper() if sort_method.lower() == "dapi" else sort_method
 
-        # FACS population (retained for completeness)
+        # FACS population (for the column)
         if sort_method.lower() == "pooled":
             facs_population = form_data['facs_population']
         elif sort_method.lower() == "unsorted":
@@ -218,38 +334,33 @@ class DataLogger:
 
         rxn_number = int(form_data['rxn_number'])
 
-        # Initialize per-date chip usage
+        # Chip usage per experiment date (continue only on same date)
         if current_date not in self.counter_data["date_info"]:
             self.counter_data["date_info"][current_date] = {"chips": {}}
         chips_map = self.counter_data["date_info"][current_date]["chips"]  # str chip -> used_wells
 
-        # Determine starting chip for THIS submission
         if self.counter_data["next_counter"] is None:
-            # First-time fallback; user should set via /update_counter, but keep a default
             self.counter_data["next_counter"] = 90
 
         start_chip = int(self.counter_data["next_counter"])
         chip = start_chip
         used = int(chips_map.get(str(chip), 0))
 
-        # Allocate wells across chips for this submission
-        assignments = []  # list of (chip, well)
-        updates = {}      # chip -> final used_wells
+        # Allocate wells with rollover per chip (max 8)
+        assignments = []
+        updates = {}
         for _ in range(rxn_number):
             if used == 8:
-                updates[str(chip)] = used  # persist full chip
+                updates[str(chip)] = used
                 chip += 1
                 used = int(chips_map.get(str(chip), 0))
             used += 1
             assignments.append((chip, used))
             updates[str(chip)] = used
 
-        # Persist chip usage for this date
         chips_map.update(updates)
 
-        # Update next_counter badge:
-        # - If last chip is full, advance to next chip
-        # - Else stay on current chip to allow continuation for this date
+        # After submission, keep chip if not full; otherwise advance
         last_chip, last_used = assignments[-1]
         if last_used == 8:
             self.counter_data["next_counter"] = last_chip + 1
@@ -257,37 +368,31 @@ class DataLogger:
             self.counter_data["next_counter"] = last_chip
 
         # Indices
-        atac_indices = [self.convert_index(index) for index in form_data['atac_indices'].split(",")] if form_data.get('atac_indices') else []
-        atac_indices = [self.pad_index(index) for index in atac_indices]
+        atac_indices = [self.convert_index(i) for i in form_data['atac_indices'].split(",")] if form_data.get('atac_indices') else []
+        atac_indices = [self.pad_index(i) for i in atac_indices]
+        rna_indices = [self.convert_index(i) for i in form_data['rna_indices'].split(",")] if form_data.get('rna_indices') else []
+        rna_indices = [self.pad_index(i) for i in rna_indices]
 
-        rna_indices = [self.convert_index(index) for index in form_data['rna_indices'].split(",")] if form_data.get('rna_indices') else []
-        rna_indices = [self.pad_index(index) for index in rna_indices]
-
-        # Process rows
         dup_index_counter = {}
-        headers = [cell.value for cell in worksheet[1]]
+        headers = [cell.value for cell in ws[1]]
 
         # Modalities
-        if project == "HMBA_Aim4":
-            modalities = ["RNA"]
+        modalities = ["RNA"] if project == "HMBA_Aim4" else ["RNA", "ATAC"]
+
+        # Tissue name base (padded slab/tile)
+        if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label:
+            slab_for_tissue = combined_slab_label
         else:
-            modalities = ["RNA", "ATAC"]
+            slab_for_tissue = slab
+        tissue_name_base = f"{donor_name}.{tile_location_abbr}.{slab_for_tissue}.{tile}"
 
         for x in range(rxn_number):
             p_number, port_well = assignments[x]
             barcoded_cell_sample_name = f'P{str(p_number).zfill(4)}_{port_well}'
 
-            # Tissue name: Cortex/Aim4 use combined slabs; others single slab
-            if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label:
-                slab_for_tissue = combined_slab_label  # padded
-            else:
-                slab_for_tissue = slab  # padded single
-
-            tissue_name_base = f"{donor_name}.{tile_location_abbr}.{slab_for_tissue}.{tile}"
-
             for modality in modalities:
                 self.write_modality_data(
-                    worksheet, current_row, modality, x,
+                    ws, current_row, modality, x,
                     current_date, mit_name, slab, tile, sort_method,
                     port_well, barcoded_cell_sample_name,
                     form_data,
@@ -301,8 +406,17 @@ class DataLogger:
                 )
                 current_row += 1
 
-        # Save
-        workbook.save(self.excel_file)
+        # Save workbook (with concurrency protection if on GCS) and counters locally
+        for attempt in range(3):
+            try:
+                self._upload_workbook(wb, object_name, if_generation_match=generation if GCS_ENABLED else None)
+                break
+            except Exception as e:
+                if GCS_ENABLED and "precondition" in str(e).lower():
+                    wb, generation = self._download_workbook(object_name)
+                else:
+                    raise
+
         with open(self.counter_file, 'w') as f:
             json.dump(self.counter_data, f, indent=4)
 
@@ -313,36 +427,31 @@ class DataLogger:
                             atac_indices, headers, dup_index_counter, donor_name,
                             project=None, combined_slab_label=None, slab_count=1):
 
-        # First column (krienen_lab_identifier): unpadded slab/tile in the identifier only
+        # Identifier slab part (unpadded; plural for multi)
         if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label and slab_count > 1:
-            # Multi-slab: strip padding in label only
-            slab_label_parts = []
+            unpadded = []
             for s in combined_slab_label.split('_'):
                 try:
-                    slab_label_parts.append(str(int(s)))  # "05" -> "5"
+                    unpadded.append(str(int(s)))
                 except ValueError:
-                    slab_label_parts.append(s)
-            slab_part = f"Slabs_{'_'.join(slab_label_parts)}"
+                    unpadded.append(s)
+            slab_part = f"Slabs_{'_'.join(unpadded)}"
         else:
             slab_part = f"Slab{int(slab)}"
 
-        # Tile part: if numeric, include "TileN"; if text, include the text and omit "Tile"
-        if str(tile).isdigit():
-            tile_part = f"Tile{int(tile)}"
-        else:
-            tile_part = tile
+        # Identifier tile part: "TileN" for numeric, raw text for non-numeric (e.g., "EC")
+        tile_part = f"Tile{int(tile)}" if str(tile).isdigit() else tile
 
         krienen_lab_identifier = (
             f"{current_date}_HMBA_{mit_name}_{slab_part}_{tile_part}_{sort_method}_{modality}{x + 1}"
         )
 
-        # Experimenter initials (use the 'sorter_initials' field)
         experimenter_initials = form_data['sorter_initials'].strip().upper()
         sorting_status = "PS" if sort_method.lower() in ["pooled", "dapi"] else "PN"
 
-        tissue_name = tissue_name_base  # padded values for all other columns
+        tissue_name = tissue_name_base
 
-        # HMBA_Aim4 uses Rseq-only naming and TX prefix; others use Multiome + XM
+        # Project flags and suffixes
         if project == "HMBA_Aim4":
             dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Rseq'
             enriched_prefix = "MPTX"
@@ -351,15 +460,13 @@ class DataLogger:
             dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Multiome'
             enriched_prefix = "MPXM"
             rna_suffix = "XR"
-
-        # ATAC suffix (if used in library sets)
         atac_suffix = "XA"
 
-        # Enriched names include experimenter initials
+        # Enriched names include initials
         enriched_cell_sample_container_name = f"{enriched_prefix}_{current_date}_{sorting_status}_{experimenter_initials}"
         enriched_cell_sample_name = f'{enriched_prefix}_{current_date}_{sorting_status}_{experimenter_initials}_{port_well}'
 
-        # Study should equal the selected project value exactly
+        # Study equals Project selection
         study = form_data.get('project', '')
 
         seq_portal = "no"
@@ -373,14 +480,11 @@ class DataLogger:
         if modality == "RNA":
             if project == "HMBA_Aim4":
                 library_method = "10xV4"
-                library_type_suffix = rna_suffix  # "TX"
+                library_type_suffix = rna_suffix
             else:
                 library_method = "10xMultiome-RSeq"
-                library_type_suffix = rna_suffix  # "XR"
-
-            # Library type includes initials: LP{INITIALS}{SUFFIX}
+                library_type_suffix = rna_suffix
             library_type = f"LP{experimenter_initials}{library_type_suffix}"
-
             library_index = rna_indices[x]
 
             cdna_concentration = float(form_data['cdna_concentration'].split(',')[x])
@@ -393,11 +497,9 @@ class DataLogger:
             cdna_pcr_cycles = int(form_data['cdna_pcr_cycles'].split(',')[x])
             rna_size = int(form_data['rna_sizes'].split(',')[x])
             library_cycles = int(form_data['library_cycles_rna'].split(',')[x])
-        else:  # ATAC
+        else:
             library_method = "10xMultiome-ASeq"
-            # Library type includes initials: LP{INITIALS}XA
             library_type = f"LP{experimenter_initials}{atac_suffix}"
-
             library_index = atac_indices[x]
 
             atac_concentration = float(form_data['atac_lib_concentration'].split(',')[x])
@@ -413,7 +515,7 @@ class DataLogger:
             cdna_pcr_cycles = None
             rna_size = None
 
-        # Update library prep set counter (include experimenter initials via library_type)
+        # Library prep set/name with initials
         key = (library_type, library_prep_date, library_index)
         dup_index_counter[key] = dup_index_counter.get(key, 0) + 1
         library_prep_set = f"{library_type}_{library_prep_date}_{dup_index_counter[key]}"
@@ -424,7 +526,7 @@ class DataLogger:
         volume = float(form_data['nuclei_volume'])
         enriched_cell_sample_quantity_count = round(concentration * volume)
 
-        # Prepare row data
+        # Prepare row
         row_data = [
             krienen_lab_identifier,
             seq_portal,
@@ -445,11 +547,10 @@ class DataLogger:
             enriched_cell_sample_quantity_count,
             barcoded_cell_sample_name,
             library_method,
-            # cDNA_amplification_method: Aim4 -> "10xV4"; others RNA -> "10xMultiome-RSeq"; ATAC -> None
             ("10xV4" if (modality == "RNA" and project == "HMBA_Aim4")
              else "10xMultiome-RSeq" if modality == "RNA" else None),
             self.convert_date(form_data['cdna_amp_date']) if modality == "RNA" else None,
-            None,  # amplified_cdna_name (filled later for RNA)
+            None,  # amplified_cdna_name (filled below for RNA)
             cdna_pcr_cycles if modality == "RNA" else None,
             "Pass" if modality == "RNA" else None,
             percent_cdna_400bp if modality == "RNA" else None,
@@ -467,41 +568,35 @@ class DataLogger:
             f"SI-NA-{atac_indices[x]}" if modality == "ATAC" else None
         ]
 
-        # Handle amplified_cdna_name for RNA (include experimenter initials)
+        # amplified_cdna_name for RNA with initials: AP{INITIALS}{TX|XR}_{date}_{batch}_{A..H}
         if modality == "RNA":
             cdna_amp_date = self.convert_date(form_data['cdna_amp_date'])
             amp_date_key = f"amp_{cdna_amp_date}"
-
             if amp_date_key not in self.counter_data["amp_counter"]:
                 self.counter_data["amp_counter"][amp_date_key] = 0
-
             reaction_count = self.counter_data["amp_counter"][amp_date_key]
             letter = chr(65 + (reaction_count % 8))
-            batch_num_for_amp = (reaction_count // 8) + 1
-
-            # Amplification name prefix AP{INITIALS}{SUFFIX}, e.g., APRNXR_230714_1_A
+            batch_num = (reaction_count // 8) + 1
             amp_prefix = f"AP{experimenter_initials}{rna_suffix}"
-
-            row_data[21] = f"{amp_prefix}_{cdna_amp_date}_{batch_num_for_amp}_{letter}"
+            row_data[21] = f"{amp_prefix}_{cdna_amp_date}_{batch_num}_{letter}"
             self.counter_data["amp_counter"][amp_date_key] += 1
 
-        # Write to Excel
+        # Write cells
         for col_num, value in enumerate(row_data, start=1):
             cell = worksheet.cell(row=current_row, column=col_num, value=value)
             cell.font = Font(name="Arial", size=10)
             cell.alignment = Alignment(horizontal='left')
-
-            # Apply black fill for certain cells
             if (modality == "ATAC" and value is None) or (
-                    modality == "RNA" and col_num == headers.index('ATAC_index') + 1):
+                modality == "RNA" and col_num == headers.index('ATAC_index') + 1
+            ):
                 cell.fill = self.black_fill
 
-        # Apply black fill to tissue_name_old
+        # Black fill for tissue_name_old
         tissue_old_col = headers.index('tissue_name_old') + 1
         worksheet.cell(row=current_row, column=tissue_old_col).fill = self.black_fill
 
 
-# Create global instance
+# Global instance
 data_logger = DataLogger()
 
 
@@ -514,32 +609,42 @@ def index():
 def submit_data():
     try:
         form_data = request.json
-
-        # Validate required fields
-        required_fields = ['date', 'marmoset', 'slab', 'tile', 'hemisphere', 'tile_location', 'sort_method',
-                           'rxn_number']
+        required_fields = ['user_first_name', 'date', 'marmoset', 'slab', 'tile', 'hemisphere', 'tile_location', 'sort_method',
+                           'rxn_number', 'sorter_initials']
         for field in required_fields:
             if not form_data.get(field):
                 return jsonify({'success': False, 'error': f'Missing required field: {field}'})
-
-        # Process the data
         success = data_logger.process_form_data(form_data)
-
         if success:
             return jsonify({'success': True, 'message': 'Data saved successfully!'})
         else:
             return jsonify({'success': False, 'error': 'Failed to process data'})
-
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 
 @app.route('/download')
 def download_excel():
-    if os.path.exists(data_logger.excel_file):
-        return send_file(data_logger.excel_file, as_attachment=True, download_name='krienen_data_log.xlsx')
-    else:
-        return jsonify({'error': 'No data file found'}), 404
+    try:
+        user_first_name = (request.args.get('user') or "").strip()
+        if not user_first_name:
+            return jsonify({'error': 'Missing user name in query parameter ?user='}), 400
+        user_key = data_logger._safe_user_key(user_first_name)
+        object_name = data_logger._load_pointer(user_key)
+        if not object_name:
+            # Create a new file for this user if none exists yet
+            object_name = data_logger._new_object_name(user_key)
+            data_logger._save_pointer(user_key, object_name)
+        data = data_logger._download_workbook_bytes(object_name)
+        filename = os.path.basename(object_name)
+        return send_file(
+            io.BytesIO(data),
+            as_attachment=True,
+            download_name=filename,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/get_counter')
@@ -562,64 +667,30 @@ def update_counter():
     try:
         request_data = request.json
         new_counter = request_data.get('new_counter')
-
         if not isinstance(new_counter, int) or new_counter < 0:
             return jsonify({'success': False, 'error': 'Invalid counter value'})
-
-        # Update the counter in the data_logger instance
         data_logger.counter_data['next_counter'] = new_counter
-
-        # Save to file
         with open(data_logger.counter_file, 'w') as f:
             json.dump(data_logger.counter_data, f, indent=4)
-
         return jsonify({'success': True, 'new_counter': new_counter})
-
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 
-# Optional debug endpoints
-@app.route('/debug/counter')
-def debug_counter():
-    try:
-        with open(data_logger.counter_file, 'r') as f:
-            contents = json.load(f)
-        return jsonify({
-            "path": data_logger.counter_file,
-            "counter_data": contents,
-            "success": True
-        })
-    except Exception as e:
-        return jsonify({
-            "path": data_logger.counter_file,
-            "error": str(e),
-            "success": False
-        }), 500
-
-
+# Optional debug: reset counters (does not rotate per-user pointers)
 @app.route('/debug/reset_counter', methods=['POST'])
 def debug_reset_counter():
     try:
-        data_logger.counter_data = {
-            "next_counter": None,
-            "date_info": {},
-            "amp_counter": {}
-        }
+        data_logger.counter_data["next_counter"] = None
+        data_logger.counter_data["date_info"] = {}
+        data_logger.counter_data["amp_counter"] = {}
         with open(data_logger.counter_file, 'w') as f:
             json.dump(data_logger.counter_data, f, indent=4)
-        return jsonify({
-            "path": data_logger.counter_file,
-            "success": True,
-            "message": "Counter data reset to defaults."
-        })
+        return jsonify({'success': True})
     except Exception as e:
-        return jsonify({
-            "path": data_logger.counter_file,
-            "success": False,
-            "error": str(e)
-        }), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 if __name__ == '__main__':
+    # Local dev server
     app.run(debug=True, host='0.0.0.0', port=8080)
