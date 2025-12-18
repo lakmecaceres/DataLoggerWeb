@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, make_response
 import os
 import io
 import re
@@ -17,6 +17,18 @@ if GCS_ENABLED:
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'marmoset'
+
+@app.route('/favicon.ico')
+def favicon():
+    resp = make_response(
+        send_from_directory(
+            os.path.join(app.root_path, 'static'),
+            'favicon.ico',
+            mimetype='image/vnd.microsoft.icon'
+        )
+    )
+    resp.headers['Cache-Control'] = 'public, max-age=31536000'
+    return resp
 
 
 class DataLogger:
