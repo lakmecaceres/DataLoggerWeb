@@ -658,6 +658,42 @@ data_logger = DataLogger()
 def index():
     return render_template('index.html')
 
+@app.route('/update_counter', methods=['POST'])
+def update_counter():
+    try:
+        request_data = request.json or {}
+        # Accept user from JSON or query param
+        user_first_name = (request_data.get('user_first_name') or request.args.get('user') or "").strip()
+        if not user_first_name:
+            return jsonify({'success': False, 'error': 'Missing user_first_name'}), 400
+
+        # Accept counter as number or numeric string
+        new_counter_raw = request_data.get('new_counter')
+        try:
+            new_counter = int(new_counter_raw)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'Invalid counter value'}), 400
+        if new_counter < 0:
+            return jsonify({'success': False, 'error': 'Invalid counter value'}), 400
+
+        user_key = data_logger._safe_user_key(user_first_name)
+
+        # If you’re persisting per-user state to GCS:
+        # state = data_logger._load_user_state(user_key)
+        # state['next_counter'] = new_counter
+        # data_logger._save_user_state(user_key, state)
+
+        # If you’re still using the local meta fallback:
+        meta = data_logger._load_local_meta()
+        states = meta.setdefault('user_states', {})
+        state = states.setdefault(user_key, {"next_counter": None, "date_info": {}, "amp_counter": {}})
+        state['next_counter'] = new_counter
+        data_logger._save_local_meta(meta)
+
+        return jsonify({'success': True, 'new_counter': new_counter})
+    except Exception as e:
+        # Surface server-side error to help diagnose
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/submit', methods=['POST'])
 def submit_data():

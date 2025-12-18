@@ -444,21 +444,22 @@
 
     function editCounter() {
         const badge = document.getElementById('counter-badge');
-        const userName = localStorage.getItem('user_first_name') || '';
-        if (!userName.trim()) {
+        const userName = (localStorage.getItem('user_first_name') || '').trim();
+        if (!userName) {
             alert('Please enter your first name. Reload the page to set it.');
             return;
         }
+
         const currentText = badge.textContent.trim();
         const currentCounter = /^\d+$/.test(currentText) ? currentText : '';
-        const newCounter = prompt(
+        const newCounterStr = prompt(
             `Current P-counter: ${currentCounter || 'not set'}\n\n` +
             "Enter the most recent chip number you have used (e.g., 124):",
             currentCounter || ''
         );
-        if (newCounter === null) return;
+        if (newCounterStr === null) return;
 
-        const counterNum = parseInt(newCounter);
+        const counterNum = parseInt(newCounterStr, 10);
         if (isNaN(counterNum) || counterNum < 0) {
             alert('Please enter a valid positive number.');
             return;
@@ -471,7 +472,7 @@
         fetch('/update_counter', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_first_name: userName.trim(), new_counter: counterNum })
+            body: JSON.stringify({ user_first_name: userName, new_counter: counterNum })
         })
         .then(response => response.json())
         .then(data => {
@@ -480,11 +481,12 @@
                 badge.style.background = '#107c10';
                 setTimeout(() => { badge.style.background = '#0078d7'; }, 1000);
             } else {
-                alert('Error updating counter: ' + data.error);
+                alert('Error updating counter: ' + (data.error || 'Unknown error'));
                 loadCounterBadge();
             }
         })
-        .catch(() => {
+        .catch(err => {
+            console.error('update_counter error:', err);
             alert('Error updating counter. Please try again.');
             loadCounterBadge();
         });
