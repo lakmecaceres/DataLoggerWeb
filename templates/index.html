@@ -416,64 +416,74 @@
         }
 
         // Counter badge functions
-        function loadCounterBadge() {
-            const badge = document.getElementById('counter-badge');
-            fetch('/get_counter')
-                .then(response => response.json())
-                .then(data => {
-                    const value = data.next_counter;
-                    if (value == null) {
-                        const current = badge.textContent.trim();
-                        if (!current) badge.textContent = 'Chip Number = ?';
-                    } else {
-                        badge.textContent = value;
-                    }
-                })
-                .catch(() => {});
+    function loadCounterBadge() {
+        const badge = document.getElementById('counter-badge');
+        const name = localStorage.getItem('user_first_name') || '';
+        if (!name.trim()) {
+            badge.textContent = 'Chip Number = ?';
+            return;
         }
-
-        function editCounter() {
-            const badge = document.getElementById('counter-badge');
-            const currentText = badge.textContent.trim();
-            const currentCounter = /^\d+$/.test(currentText) ? currentText : '';
-            const newCounter = prompt(
-                `Current P-counter: ${currentCounter || 'not set'}\n\n` +
-                "Enter the most recent entry from the 'barcoded_cell_sample_name' column in the Data Log, for example, 101:",
-                currentCounter || ''
-            );
-            if (newCounter === null) return;
-
-            const counterNum = parseInt(newCounter);
-            if (isNaN(counterNum) || counterNum < 0) {
-                alert('Please enter a valid positive number.');
-                return;
-            }
-
-            if (!confirm(`Change P-counter to ${counterNum}?`)) return;
-
-            badge.textContent = '...';
-
-            fetch('/update_counter', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ new_counter: counterNum })
-            })
+        fetch('/get_counter?user=' + encodeURIComponent(name.trim()))
             .then(response => response.json())
             .then(data => {
-                if (data.success) {
-                    badge.textContent = counterNum;
-                    badge.style.background = '#107c10';
-                    setTimeout(() => { badge.style.background = '#0078d7'; }, 1000);
+                const value = data.next_counter;
+                if (value == null) {
+                    badge.textContent = 'Chip Number = ?';
                 } else {
-                    alert('Error updating counter: ' + data.error);
-                    loadCounterBadge();
+                    badge.textContent = value;
                 }
             })
-            .catch(() => {
-                alert('Error updating counter. Please try again.');
-                loadCounterBadge();
-            });
+            .catch(() => { /* noop */ });
+    }
+
+    function editCounter() {
+        const badge = document.getElementById('counter-badge');
+        const userName = localStorage.getItem('user_first_name') || '';
+        if (!userName.trim()) {
+            alert('Please enter your first name. Reload the page to set it.');
+            return;
         }
+        const currentText = badge.textContent.trim();
+        const currentCounter = /^\d+$/.test(currentText) ? currentText : '';
+        const newCounter = prompt(
+            `Current P-counter: ${currentCounter || 'not set'}\n\n` +
+            "Enter the most recent chip number you have used (e.g., 124):",
+            currentCounter || ''
+        );
+        if (newCounter === null) return;
+
+        const counterNum = parseInt(newCounter);
+        if (isNaN(counterNum) || counterNum < 0) {
+            alert('Please enter a valid positive number.');
+            return;
+        }
+
+        if (!confirm(`Change P-counter to ${counterNum}?`)) return;
+
+        badge.textContent = '...';
+
+        fetch('/update_counter', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_first_name: userName.trim(), new_counter: counterNum })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                badge.textContent = counterNum;
+                badge.style.background = '#107c10';
+                setTimeout(() => { badge.style.background = '#0078d7'; }, 1000);
+            } else {
+                alert('Error updating counter: ' + data.error);
+                loadCounterBadge();
+            }
+        })
+        .catch(() => {
+            alert('Error updating counter. Please try again.');
+            loadCounterBadge();
+        });
+    }
+
 
         // eLab link paste
         async function pasteElabLink() {

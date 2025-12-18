@@ -72,55 +72,46 @@ class DataLogger:
         }
 
         self.black_fill = PatternFill(start_color='000000', fill_type='solid')
-        self.load_counter_data()
 
-    # ----------------- Helpers: user key and object names -----------------
+    # ----------------- User key and object names -----------------
 
     def _safe_user_key(self, name: str) -> str:
-        # allow letters, numbers, underscore, dash; fallback to "unknown" if empty
         name = (name or "").strip()
         if not name:
             return "unknown"
-        key = re.sub(r'[^A-Za-z0-9_-]+', '_', name)
-        return key or "unknown"
-
-    def _new_object_name(self, user_key: str) -> str:
-        ts = datetime.now().strftime('%YMMDD_%H%M%S')  # keep consistent sortable naming
-        # File per user, include user name in file name
-        return f"logs/{user_key}/{user_key}_krienen_data_log_{ts}.xlsx"
+        return re.sub(r'[^A-Za-z0-9_-]+', '_', name) or "unknown"
 
     # ----------------- Workbook storage helpers (GCS/local) -----------------
 
+    def _new_object_name(self, user_key: str) -> str:
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        return f"logs/{user_key}/{user_key}_krienen_data_log_{ts}.xlsx"
+
     def _load_pointer(self, user_key: str):
-        # Try GCS pointer first
         if GCS_ENABLED:
             bucket = self.storage_client.bucket(GCS_BUCKET)
             blob = bucket.blob(f"pointers/{user_key}.json")
             if blob.exists():
                 try:
                     data = json.loads(blob.download_as_text())
-                    if isinstance(data, dict) and "object" in data and data["object"]:
+                    if isinstance(data, dict) and data.get("object"):
                         return data["object"]
                 except Exception:
                     pass
-        # Fallback to local pointer
-        mapping = self.counter_data.get("current_log_objects", {})
+        # local fallback mapping (optional)
+        mapping = self._load_local_meta().get("current_log_objects", {})
         return mapping.get(user_key)
 
     def _save_pointer(self, user_key: str, object_name: str):
-        # Save both to GCS and local fallback
         if GCS_ENABLED:
             bucket = self.storage_client.bucket(GCS_BUCKET)
             blob = bucket.blob(f"pointers/{user_key}.json")
             blob.upload_from_string(json.dumps({"object": object_name}, indent=2), content_type="application/json")
-        if "current_log_objects" not in self.counter_data:
-            self.counter_data["current_log_objects"] = {}
-        self.counter_data["current_log_objects"][user_key] = object_name
-        with open(self.counter_file, 'w') as f:
-            json.dump(self.counter_data, f, indent=4)
+        meta = self._load_local_meta()
+        meta.setdefault("current_log_objects", {})[user_key] = object_name
+        self._save_local_meta(meta)
 
     def _download_workbook(self, object_name):
-        # Returns (workbook, generation_or_None)
         if GCS_ENABLED:
             bucket = self.storage_client.bucket(GCS_BUCKET)
             blob = bucket.blob(object_name)
@@ -185,25 +176,62 @@ class DataLogger:
                 wb.save(out)
                 return out.getvalue()
 
-    # ----------------- Core utilities -----------------
+    # ----------------- Per-user state (counters) in GCS -----------------
 
-    def load_counter_data(self):
+    def _load_local_meta(self):
         if os.path.exists(self.counter_file):
-            with open(self.counter_file, 'r') as f:
-                try:
-                    self.counter_data = json.load(f)
-                except json.JSONDecodeError:
-                    self.counter_data = {}
-        else:
-            self.counter_data = {}
+            try:
+                with open(self.counter_file, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
 
-        self.counter_data.setdefault("next_counter", None)
-        # Per-date chip usage map to support continuing chip only for same date
-        self.counter_data.setdefault("date_info", {})
-        # Amplification date counters (batch/letter naming)
-        self.counter_data.setdefault("amp_counter", {})
-        # Pointer mapping per user for local fallback
-        self.counter_data.setdefault("current_log_objects", {})
+    def _save_local_meta(self, meta: dict):
+        with open(self.counter_file, 'w') as f:
+            json.dump(meta, f, indent=4)
+
+    def _default_state(self):
+        return {
+            "next_counter": None,     # chip number badge
+            "date_info": {},          # {"YYMMDD": {"chips": {"124": used_wells,...}}}
+            "amp_counter": {}         # {"amp_YYMMDD": reaction_count}
+        }
+
+    def _load_user_state(self, user_key: str) -> dict:
+        # Try GCS
+        if GCS_ENABLED:
+            bucket = self.storage_client.bucket(GCS_BUCKET)
+            blob = bucket.blob(f"state/{user_key}.json")
+            if blob.exists():
+                try:
+                    data = json.loads(blob.download_as_text())
+                    # ensure keys
+                    out = self._default_state()
+                    out.update({k: data.get(k, v) for k, v in out.items()})
+                    return out
+                except Exception:
+                    pass
+        # Fallback to local meta mapping
+        meta = self._load_local_meta()
+        states = meta.get("user_states", {})
+        user_state = states.get(user_key, {})
+        out = self._default_state()
+        out.update({k: user_state.get(k, v) for k, v in out.items()})
+        return out
+
+    def _save_user_state(self, user_key: str, state: dict):
+        # Save to GCS
+        if GCS_ENABLED:
+            bucket = self.storage_client.bucket(GCS_BUCKET)
+            blob = bucket.blob(f"state/{user_key}.json")
+            blob.upload_from_string(json.dumps(state, indent=2), content_type="application/json")
+        # Save to local meta mapping
+        meta = self._load_local_meta()
+        meta.setdefault("user_states", {})[user_key] = state
+        self._save_local_meta(meta)
+
+    # ----------------- Core utilities -----------------
 
     def _headers(self):
         return ['krienen_lab_identifier', 'seq_portal', 'elab_link', 'experiment_start_date',
@@ -266,28 +294,29 @@ class DataLogger:
     # ----------------- Business logic -----------------
 
     def process_form_data(self, form_data):
-        # Resolve user name (first name) and user key
+        # User key
         user_first_name = (form_data.get('user_first_name') or "").strip()
         user_key = self._safe_user_key(user_first_name)
 
-        # Ensure we have a current per-user log object (file named by creation time and user)
+        # Ensure per-user current workbook pointer
         object_name = self._load_pointer(user_key)
         if not object_name:
             object_name = self._new_object_name(user_key)
             self._save_pointer(user_key, object_name)
 
-        # Load the workbook (with GCS generation for concurrency)
+        # Load workbook and per-user state
         wb, generation = self._download_workbook(object_name)
-        ws = wb.active  # Single "HMBA" sheet
+        ws = wb.active
+        state = self._load_user_state(user_key)
 
-        # Find last row with content
+        # Find next row
         last_row_with_content = 1
         for row_idx in range(1, ws.max_row + 1):
             if any(cell.value is not None for cell in ws[row_idx]):
                 last_row_with_content = row_idx
         current_row = last_row_with_content + 1
 
-        # Parse form inputs
+        # Parse inputs
         current_date = self.convert_date(form_data['date'])
         mit_name_input = form_data['marmoset']
         mit_name = "cj" + mit_name_input
@@ -297,14 +326,13 @@ class DataLogger:
         raw_slab = form_data['slab'].strip()
         hemisphere = form_data['hemisphere'].split()[0].upper()
 
-        # Multi-slab for Cortex & Aim4
         if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"}:
             slab_list = [s.strip().zfill(2) for s in raw_slab.split(',') if s.strip()]
             if not slab_list:
                 raise ValueError(f"No valid slab numbers provided for {project}")
             combined_slab_label = "_".join(slab_list)
             slab_count = len(slab_list)
-            slab = slab_list[0]  # first slab (padded) for single-value fields
+            slab = slab_list[0]
         else:
             combined_slab_label = None
             slab_count = 1
@@ -316,7 +344,6 @@ class DataLogger:
             else:
                 slab = slab.zfill(2)
 
-        # Tile padded elsewhere; first-column identifier will handle text tiles specially
         tile_value = form_data['tile'].strip()
         tile = str(int(tile_value)).zfill(2) if tile_value.isdigit() else tile_value
 
@@ -324,7 +351,6 @@ class DataLogger:
         sort_method = form_data['sort_method']
         sort_method = sort_method.upper() if sort_method.lower() == "dapi" else sort_method
 
-        # FACS population (for the column)
         if sort_method.lower() == "pooled":
             facs_population = form_data['facs_population']
         elif sort_method.lower() == "unsorted":
@@ -334,19 +360,20 @@ class DataLogger:
 
         rxn_number = int(form_data['rxn_number'])
 
-        # Chip usage per experiment date (continue only on same date)
-        if current_date not in self.counter_data["date_info"]:
-            self.counter_data["date_info"][current_date] = {"chips": {}}
-        chips_map = self.counter_data["date_info"][current_date]["chips"]  # str chip -> used_wells
+        # Per-user, per-date chip usage
+        date_info = state.setdefault("date_info", {})
+        if current_date not in date_info:
+            date_info[current_date] = {"chips": {}}
+        chips_map = date_info[current_date]["chips"]
 
-        if self.counter_data["next_counter"] is None:
-            self.counter_data["next_counter"] = 90
+        if state.get("next_counter") is None:
+            state["next_counter"] = 90
 
-        start_chip = int(self.counter_data["next_counter"])
+        start_chip = int(state["next_counter"])
         chip = start_chip
         used = int(chips_map.get(str(chip), 0))
 
-        # Allocate wells with rollover per chip (max 8)
+        # Allocate wells (max 8 per chip), continue same chip only within same date
         assignments = []
         updates = {}
         for _ in range(rxn_number):
@@ -360,12 +387,9 @@ class DataLogger:
 
         chips_map.update(updates)
 
-        # After submission, keep chip if not full; otherwise advance
+        # After submission: if last chip not full, keep chip number; else advance
         last_chip, last_used = assignments[-1]
-        if last_used == 8:
-            self.counter_data["next_counter"] = last_chip + 1
-        else:
-            self.counter_data["next_counter"] = last_chip
+        state["next_counter"] = last_chip if last_used < 8 else last_chip + 1
 
         # Indices
         atac_indices = [self.convert_index(i) for i in form_data['atac_indices'].split(",")] if form_data.get('atac_indices') else []
@@ -375,11 +399,8 @@ class DataLogger:
 
         dup_index_counter = {}
         headers = [cell.value for cell in ws[1]]
-
-        # Modalities
         modalities = ["RNA"] if project == "HMBA_Aim4" else ["RNA", "ATAC"]
 
-        # Tissue name base (padded slab/tile)
         if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label:
             slab_for_tissue = combined_slab_label
         else:
@@ -402,11 +423,12 @@ class DataLogger:
                     donor_name=donor_name,
                     project=project,
                     combined_slab_label=combined_slab_label,
-                    slab_count=slab_count
+                    slab_count=slab_count,
+                    state=state  # pass state for amp_counter
                 )
                 current_row += 1
 
-        # Save workbook (with concurrency protection if on GCS) and counters locally
+        # Save workbook (GCS generation-safe) and user state
         for attempt in range(3):
             try:
                 self._upload_workbook(wb, object_name, if_generation_match=generation if GCS_ENABLED else None)
@@ -414,20 +436,19 @@ class DataLogger:
             except Exception as e:
                 if GCS_ENABLED and "precondition" in str(e).lower():
                     wb, generation = self._download_workbook(object_name)
+                    ws = wb.active
                 else:
                     raise
 
-        with open(self.counter_file, 'w') as f:
-            json.dump(self.counter_data, f, indent=4)
-
+        self._save_user_state(user_key, state)
         return True
 
     def write_modality_data(self, worksheet, current_row, modality, x, current_date, mit_name, slab, tile, sort_method,
                             port_well, barcoded_cell_sample_name, form_data, tissue_name_base, rna_indices,
                             atac_indices, headers, dup_index_counter, donor_name,
-                            project=None, combined_slab_label=None, slab_count=1):
+                            project=None, combined_slab_label=None, slab_count=1, state=None):
 
-        # Identifier slab part (unpadded; plural for multi)
+        # Identifier slab/tile formatting
         if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label and slab_count > 1:
             unpadded = []
             for s in combined_slab_label.split('_'):
@@ -438,8 +459,6 @@ class DataLogger:
             slab_part = f"Slabs_{'_'.join(unpadded)}"
         else:
             slab_part = f"Slab{int(slab)}"
-
-        # Identifier tile part: "TileN" for numeric, raw text for non-numeric (e.g., "EC")
         tile_part = f"Tile{int(tile)}" if str(tile).isdigit() else tile
 
         krienen_lab_identifier = (
@@ -448,10 +467,8 @@ class DataLogger:
 
         experimenter_initials = form_data['sorter_initials'].strip().upper()
         sorting_status = "PS" if sort_method.lower() in ["pooled", "dapi"] else "PN"
-
         tissue_name = tissue_name_base
 
-        # Project flags and suffixes
         if project == "HMBA_Aim4":
             dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Rseq'
             enriched_prefix = "MPTX"
@@ -462,11 +479,9 @@ class DataLogger:
             rna_suffix = "XR"
         atac_suffix = "XA"
 
-        # Enriched names include initials
         enriched_cell_sample_container_name = f"{enriched_prefix}_{current_date}_{sorting_status}_{experimenter_initials}"
         enriched_cell_sample_name = f'{enriched_prefix}_{current_date}_{sorting_status}_{experimenter_initials}_{port_well}'
 
-        # Study equals Project selection
         study = form_data.get('project', '')
 
         seq_portal = "no"
@@ -515,7 +530,6 @@ class DataLogger:
             cdna_pcr_cycles = None
             rna_size = None
 
-        # Library prep set/name with initials
         key = (library_type, library_prep_date, library_index)
         dup_index_counter[key] = dup_index_counter.get(key, 0) + 1
         library_prep_set = f"{library_type}_{library_prep_date}_{dup_index_counter[key]}"
@@ -526,7 +540,6 @@ class DataLogger:
         volume = float(form_data['nuclei_volume'])
         enriched_cell_sample_quantity_count = round(concentration * volume)
 
-        # Prepare row
         row_data = [
             krienen_lab_identifier,
             seq_portal,
@@ -535,7 +548,7 @@ class DataLogger:
             mit_name,
             donor_name,
             tissue_name,
-            None,  # tissue_name_old
+            None,
             dissociated_cell_sample_name,
             facs_population,
             cell_prep_type,
@@ -550,7 +563,7 @@ class DataLogger:
             ("10xV4" if (modality == "RNA" and project == "HMBA_Aim4")
              else "10xMultiome-RSeq" if modality == "RNA" else None),
             self.convert_date(form_data['cdna_amp_date']) if modality == "RNA" else None,
-            None,  # amplified_cdna_name (filled below for RNA)
+            None,
             cdna_pcr_cycles if modality == "RNA" else None,
             "Pass" if modality == "RNA" else None,
             percent_cdna_400bp if modality == "RNA" else None,
@@ -568,20 +581,20 @@ class DataLogger:
             f"SI-NA-{atac_indices[x]}" if modality == "ATAC" else None
         ]
 
-        # amplified_cdna_name for RNA with initials: AP{INITIALS}{TX|XR}_{date}_{batch}_{A..H}
+        # amplified_cdna_name tracking per amp date (uses state.amp_counter)
         if modality == "RNA":
             cdna_amp_date = self.convert_date(form_data['cdna_amp_date'])
             amp_date_key = f"amp_{cdna_amp_date}"
-            if amp_date_key not in self.counter_data["amp_counter"]:
-                self.counter_data["amp_counter"][amp_date_key] = 0
-            reaction_count = self.counter_data["amp_counter"][amp_date_key]
+            amp_counter = state.setdefault("amp_counter", {})
+            if amp_date_key not in amp_counter:
+                amp_counter[amp_date_key] = 0
+            reaction_count = amp_counter[amp_date_key]
             letter = chr(65 + (reaction_count % 8))
             batch_num = (reaction_count // 8) + 1
-            amp_prefix = f"AP{experimenter_initials}{rna_suffix}"
+            amp_prefix = f"AP{experimenter_initials}{'TX' if project == 'HMBA_Aim4' else 'XR'}"
             row_data[21] = f"{amp_prefix}_{cdna_amp_date}_{batch_num}_{letter}"
-            self.counter_data["amp_counter"][amp_date_key] += 1
+            amp_counter[amp_date_key] += 1
 
-        # Write cells
         for col_num, value in enumerate(row_data, start=1):
             cell = worksheet.cell(row=current_row, column=col_num, value=value)
             cell.font = Font(name="Arial", size=10)
@@ -590,13 +603,10 @@ class DataLogger:
                 modality == "RNA" and col_num == headers.index('ATAC_index') + 1
             ):
                 cell.fill = self.black_fill
-
-        # Black fill for tissue_name_old
         tissue_old_col = headers.index('tissue_name_old') + 1
         worksheet.cell(row=current_row, column=tissue_old_col).fill = self.black_fill
 
 
-# Global instance
 data_logger = DataLogger()
 
 
@@ -615,10 +625,7 @@ def submit_data():
             if not form_data.get(field):
                 return jsonify({'success': False, 'error': f'Missing required field: {field}'})
         success = data_logger.process_form_data(form_data)
-        if success:
-            return jsonify({'success': True, 'message': 'Data saved successfully!'})
-        else:
-            return jsonify({'success': False, 'error': 'Failed to process data'})
+        return jsonify({'success': True, 'message': 'Data saved successfully!'}) if success else jsonify({'success': False, 'error': 'Failed to process data'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -632,7 +639,6 @@ def download_excel():
         user_key = data_logger._safe_user_key(user_first_name)
         object_name = data_logger._load_pointer(user_key)
         if not object_name:
-            # Create a new file for this user if none exists yet
             object_name = data_logger._new_object_name(user_key)
             data_logger._save_pointer(user_key, object_name)
         data = data_logger._download_workbook_bytes(object_name)
@@ -650,47 +656,51 @@ def download_excel():
 @app.route('/get_counter')
 def get_counter():
     try:
-        return jsonify({
-            'next_counter': data_logger.counter_data.get('next_counter', None),
-            'success': True
-        })
+        user_first_name = (request.args.get('user') or "").strip()
+        if not user_first_name:
+            return jsonify({'success': False, 'error': 'Missing user name (?user=...)'}), 400
+        user_key = data_logger._safe_user_key(user_first_name)
+        state = data_logger._load_user_state(user_key)
+        return jsonify({'next_counter': state.get('next_counter', None), 'success': True})
     except Exception as e:
-        return jsonify({
-            'next_counter': None,
-            'success': False,
-            'error': str(e)
-        })
+        return jsonify({'next_counter': None, 'success': False, 'error': str(e)})
 
 
 @app.route('/update_counter', methods=['POST'])
 def update_counter():
     try:
-        request_data = request.json
+        request_data = request.json or {}
+        user_first_name = (request_data.get('user_first_name') or "").strip()
+        if not user_first_name:
+            return jsonify({'success': False, 'error': 'Missing user_first_name'}), 400
         new_counter = request_data.get('new_counter')
         if not isinstance(new_counter, int) or new_counter < 0:
             return jsonify({'success': False, 'error': 'Invalid counter value'})
-        data_logger.counter_data['next_counter'] = new_counter
-        with open(data_logger.counter_file, 'w') as f:
-            json.dump(data_logger.counter_data, f, indent=4)
+
+        user_key = data_logger._safe_user_key(user_first_name)
+        state = data_logger._load_user_state(user_key)
+        state['next_counter'] = new_counter
+        data_logger._save_user_state(user_key, state)
         return jsonify({'success': True, 'new_counter': new_counter})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 
-# Optional debug: reset counters (does not rotate per-user pointers)
+# Optional: reset only this user's state (does not change pointer/files)
 @app.route('/debug/reset_counter', methods=['POST'])
 def debug_reset_counter():
     try:
-        data_logger.counter_data["next_counter"] = None
-        data_logger.counter_data["date_info"] = {}
-        data_logger.counter_data["amp_counter"] = {}
-        with open(data_logger.counter_file, 'w') as f:
-            json.dump(data_logger.counter_data, f, indent=4)
-        return jsonify({'success': True})
+        request_data = request.json or {}
+        user_first_name = (request_data.get('user_first_name') or "").strip()
+        if not user_first_name:
+            return jsonify({'success': False, 'error': 'Missing user_first_name'}), 400
+        user_key = data_logger._safe_user_key(user_first_name)
+        state = data_logger._default_state()
+        data_logger._save_user_state(user_key, state)
+        return jsonify({'success': True, 'message': f"State reset for {user_key}"})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
 if __name__ == '__main__':
-    # Local dev server
     app.run(debug=True, host='0.0.0.0', port=8080)
