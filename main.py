@@ -18,18 +18,6 @@ if GCS_ENABLED:
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'marmoset'
 
-@app.route('/favicon.ico')
-def favicon():
-    resp = make_response(
-        send_from_directory(
-            os.path.join(app.root_path, 'static'),
-            'favicon.ico',
-            mimetype='image/vnd.microsoft.icon'
-        )
-    )
-    resp.headers['Cache-Control'] = 'public, max-age=31536000'
-    return resp
-
 
 class DataLogger:
     def __init__(self):
@@ -188,7 +176,7 @@ class DataLogger:
                 wb.save(out)
                 return out.getvalue()
 
-    # ----------------- Per-user state (counters) in GCS -----------------
+    # ----------------- Per-user state (local meta fallback only) -----------------
 
     def _load_local_meta(self):
         if os.path.exists(self.counter_file):
@@ -202,46 +190,6 @@ class DataLogger:
     def _save_local_meta(self, meta: dict):
         with open(self.counter_file, 'w') as f:
             json.dump(meta, f, indent=4)
-
-    def _default_state(self):
-        return {
-            "next_counter": None,     # chip number badge
-            "date_info": {},          # {"YYMMDD": {"chips": {"124": used_wells,...}}}
-            "amp_counter": {}         # {"amp_YYMMDD": reaction_count}
-        }
-
-    def _load_user_state(self, user_key: str) -> dict:
-        # Try GCS
-        if GCS_ENABLED:
-            bucket = self.storage_client.bucket(GCS_BUCKET)
-            blob = bucket.blob(f"state/{user_key}.json")
-            if blob.exists():
-                try:
-                    data = json.loads(blob.download_as_text())
-                    # ensure keys
-                    out = self._default_state()
-                    out.update({k: data.get(k, v) for k, v in out.items()})
-                    return out
-                except Exception:
-                    pass
-        # Fallback to local meta mapping
-        meta = self._load_local_meta()
-        states = meta.get("user_states", {})
-        user_state = states.get(user_key, {})
-        out = self._default_state()
-        out.update({k: user_state.get(k, v) for k, v in out.items()})
-        return out
-
-    def _save_user_state(self, user_key: str, state: dict):
-        # Save to GCS
-        if GCS_ENABLED:
-            bucket = self.storage_client.bucket(GCS_BUCKET)
-            blob = bucket.blob(f"state/{user_key}.json")
-            blob.upload_from_string(json.dumps(state, indent=2), content_type="application/json")
-        # Save to local meta mapping
-        meta = self._load_local_meta()
-        meta.setdefault("user_states", {})[user_key] = state
-        self._save_local_meta(meta)
 
     # ----------------- Core utilities -----------------
 
@@ -303,6 +251,86 @@ class DataLogger:
             return f"{index[0]}0{index[1]}"
         return index
 
+    # ----------------- Sheet-derived state helpers -----------------
+
+    def _sheet_date_chip_usage(self, ws, current_date):
+        """
+        Scan the sheet for rows with experiment_start_date == current_date
+        and build a map of chip -> highest used well for that date.
+        barcoded_cell_sample_name format: 'P####_##'
+        """
+        headers = [cell.value for cell in ws[1]]
+        date_col = headers.index('experiment_start_date') + 1
+        bcsn_col = headers.index('barcoded_cell_sample_name') + 1
+
+        chips_map = {}  # chip_str -> used_wells (int)
+        last_chip = None
+        last_used = 0
+
+        for row_idx in range(2, ws.max_row + 1):
+            date_val = ws.cell(row=row_idx, column=date_col).value
+            if date_val != current_date:
+                continue
+            name_val = ws.cell(row=row_idx, column=bcsn_col).value
+            if not name_val or not isinstance(name_val, str):
+                continue
+            m = re.match(r'^P(\d{4})_(\d)$', name_val)
+            if not m:
+                continue
+            chip = int(m.group(1))
+            well = int(m.group(2))
+            chips_map[str(chip)] = max(well, int(chips_map.get(str(chip), 0)))
+        if chips_map:
+            # Highest chip that has entries on this date
+            last_chip = max(int(c) for c in chips_map.keys())
+            last_used = int(chips_map[str(last_chip)])
+        return chips_map, last_chip, last_used
+
+    def _next_amp_name(self, ws, amp_prefix, amp_date):
+        """
+        Determine the next amplified_cdna_name by scanning existing rows in the sheet:
+        pattern: f"{amp_prefix}_{amp_date}_{batch}_{letter}"
+        letter cycles A..H; after H, batch increments.
+        """
+        headers = [cell.value for cell in ws[1]]
+        amp_name_col = headers.index('amplified_cdna_name') + 1
+
+        last_batch = 0
+        last_letter = None  # 'A'..'H'
+
+        for row_idx in range(2, ws.max_row + 1):
+            val = ws.cell(row=row_idx, column=amp_name_col).value
+            if not val or not isinstance(val, str):
+                continue
+            # Example: APLCTX_251001_1_G
+            m = re.match(rf'^{re.escape(amp_prefix)}_{re.escape(amp_date)}_(\d+)_([A-H])$', val)
+            if not m:
+                continue
+            b = int(m.group(1))
+            L = m.group(2)
+            if b > last_batch or (b == last_batch and (last_letter is None or L > last_letter)):
+                last_batch = b
+                last_letter = L
+
+        if last_batch == 0:
+            # No prior reactions for this amp date
+            return f"{amp_prefix}_{amp_date}_1_A"
+
+        # Compute next letter/batch
+        letters = 'ABCDEFGH'
+        if last_letter is None:
+            # Shouldn't happen but default safely
+            return f"{amp_prefix}_{amp_date}_{last_batch}_A"
+        idx = letters.index(last_letter)
+        if idx < 7:
+            next_letter = letters[idx + 1]
+            next_batch = last_batch
+        else:
+            next_letter = 'A'
+            next_batch = last_batch + 1
+
+        return f"{amp_prefix}_{amp_date}_{next_batch}_{next_letter}"
+
     # ----------------- Business logic -----------------
 
     def process_form_data(self, form_data):
@@ -316,10 +344,9 @@ class DataLogger:
             object_name = self._new_object_name(user_key)
             self._save_pointer(user_key, object_name)
 
-        # Load workbook and per-user state
+        # Load workbook
         wb, generation = self._download_workbook(object_name)
         ws = wb.active
-        state = self._load_user_state(user_key)
 
         # Find next row
         last_row_with_content = 1
@@ -372,36 +399,37 @@ class DataLogger:
 
         rxn_number = int(form_data['rxn_number'])
 
-        # Per-user, per-date chip usage
-        date_info = state.setdefault("date_info", {})
-        if current_date not in date_info:
-            date_info[current_date] = {"chips": {}}
-        chips_map = date_info[current_date]["chips"]
+        # Derive per-date chip usage directly from sheet for source-of-truth
+        chips_map, last_chip_on_date, last_used_on_date = self._sheet_date_chip_usage(ws, current_date)
 
-        if state.get("next_counter") is None:
-            state["next_counter"] = 90
+        # Starting chip: if we have usage on this date, continue from that chip; else keep previous counter if present, else default 90
+        if last_chip_on_date is not None:
+            start_chip = last_chip_on_date
+            used = last_used_on_date
+        else:
+            # No entries yet for this date → start at last known chip (if present in prior dates), else 90
+            # Try to parse last chip from entire sheet (regardless of date)
+            _, last_chip_any_date, last_used_any_date = self._sheet_date_chip_usage(ws, current_date=None)  # will return none since current_date mismatch
+            # Fallback: default chip 90 with used 0
+            start_chip = 90
+            used = 0
 
-        start_chip = int(state["next_counter"])
         chip = start_chip
-        used = int(chips_map.get(str(chip), 0))
-
-        # Allocate wells (max 8 per chip), continue same chip only within same date
         assignments = []
-        updates = {}
+        updates_for_date = {}
+
+        # Allocate wells (max 8 per chip), continue same chip when not full
         for _ in range(rxn_number):
             if used == 8:
-                updates[str(chip)] = used
+                updates_for_date[str(chip)] = used
                 chip += 1
                 used = int(chips_map.get(str(chip), 0))
             used += 1
             assignments.append((chip, used))
-            updates[str(chip)] = used
+            updates_for_date[str(chip)] = used
 
-        chips_map.update(updates)
-
-        # After submission: if last chip not full, keep chip number; else advance
-        last_chip, last_used = assignments[-1]
-        state["next_counter"] = last_chip if last_used < 8 else last_chip + 1
+        # Persist date usage back into chips_map for this run (in-memory, source-of-truth is the sheet we’re writing)
+        chips_map.update(updates_for_date)
 
         # Indices
         atac_indices = [self.convert_index(i) for i in form_data['atac_indices'].split(",")] if form_data.get('atac_indices') else []
@@ -435,12 +463,11 @@ class DataLogger:
                     donor_name=donor_name,
                     project=project,
                     combined_slab_label=combined_slab_label,
-                    slab_count=slab_count,
-                    state=state  # pass state for amp_counter
+                    slab_count=slab_count
                 )
                 current_row += 1
 
-        # Save workbook (GCS generation-safe) and user state
+        # Save workbook (GCS generation-safe)
         for attempt in range(3):
             try:
                 self._upload_workbook(wb, object_name, if_generation_match=generation if GCS_ENABLED else None)
@@ -452,13 +479,12 @@ class DataLogger:
                 else:
                     raise
 
-        self._save_user_state(user_key, state)
         return True
 
     def write_modality_data(self, worksheet, current_row, modality, x, current_date, mit_name, slab, tile, sort_method,
                             port_well, barcoded_cell_sample_name, form_data, tissue_name_base, rna_indices,
                             atac_indices, headers, dup_index_counter, donor_name,
-                            project=None, combined_slab_label=None, slab_count=1, state=None):
+                            project=None, combined_slab_label=None, slab_count=1):
 
         # Identifier slab/tile formatting
         if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label and slab_count > 1:
@@ -593,19 +619,11 @@ class DataLogger:
             f"SI-NA-{atac_indices[x]}" if modality == "ATAC" else None
         ]
 
-        # amplified_cdna_name tracking per amp date (uses state.amp_counter)
+        # amplified_cdna_name: derive next value by scanning the sheet, not local state
         if modality == "RNA":
             cdna_amp_date = self.convert_date(form_data['cdna_amp_date'])
-            amp_date_key = f"amp_{cdna_amp_date}"
-            amp_counter = state.setdefault("amp_counter", {})
-            if amp_date_key not in amp_counter:
-                amp_counter[amp_date_key] = 0
-            reaction_count = amp_counter[amp_date_key]
-            letter = chr(65 + (reaction_count % 8))
-            batch_num = (reaction_count // 8) + 1
-            amp_prefix = f"AP{experimenter_initials}{'TX' if project == 'HMBA_Aim4' else 'XR'}"
-            row_data[21] = f"{amp_prefix}_{cdna_amp_date}_{batch_num}_{letter}"
-            amp_counter[amp_date_key] += 1
+            amp_prefix = f"AP{experimenter_initials}{rna_suffix}"
+            row_data[21] = self._next_amp_name(worksheet, amp_prefix, cdna_amp_date)
 
         for col_num, value in enumerate(row_data, start=1):
             cell = worksheet.cell(row=current_row, column=col_num, value=value)
@@ -617,6 +635,20 @@ class DataLogger:
                 cell.fill = self.black_fill
         tissue_old_col = headers.index('tissue_name_old') + 1
         worksheet.cell(row=current_row, column=tissue_old_col).fill = self.black_fill
+
+
+# favicon route (optional, for direct /favicon.ico requests)
+@app.route('/favicon.ico')
+def favicon():
+    resp = make_response(
+        send_from_directory(
+            os.path.join(app.root_path, 'static'),
+            'favicon.ico',
+            mimetype='image/vnd.microsoft.icon'
+        )
+    )
+    resp.headers['Cache-Control'] = 'public, max-age=31536000'
+    return resp
 
 
 data_logger = DataLogger()
@@ -663,56 +695,3 @@ def download_excel():
         )
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
-
-@app.route('/get_counter')
-def get_counter():
-    try:
-        user_first_name = (request.args.get('user') or "").strip()
-        if not user_first_name:
-            return jsonify({'success': False, 'error': 'Missing user name (?user=...)'}), 400
-        user_key = data_logger._safe_user_key(user_first_name)
-        state = data_logger._load_user_state(user_key)
-        return jsonify({'next_counter': state.get('next_counter', None), 'success': True})
-    except Exception as e:
-        return jsonify({'next_counter': None, 'success': False, 'error': str(e)})
-
-
-@app.route('/update_counter', methods=['POST'])
-def update_counter():
-    try:
-        request_data = request.json or {}
-        user_first_name = (request_data.get('user_first_name') or "").strip()
-        if not user_first_name:
-            return jsonify({'success': False, 'error': 'Missing user_first_name'}), 400
-        new_counter = request_data.get('new_counter')
-        if not isinstance(new_counter, int) or new_counter < 0:
-            return jsonify({'success': False, 'error': 'Invalid counter value'})
-
-        user_key = data_logger._safe_user_key(user_first_name)
-        state = data_logger._load_user_state(user_key)
-        state['next_counter'] = new_counter
-        data_logger._save_user_state(user_key, state)
-        return jsonify({'success': True, 'new_counter': new_counter})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-
-# Optional: reset only this user's state (does not change pointer/files)
-@app.route('/debug/reset_counter', methods=['POST'])
-def debug_reset_counter():
-    try:
-        request_data = request.json or {}
-        user_first_name = (request_data.get('user_first_name') or "").strip()
-        if not user_first_name:
-            return jsonify({'success': False, 'error': 'Missing user_first_name'}), 400
-        user_key = data_logger._safe_user_key(user_first_name)
-        state = data_logger._default_state()
-        data_logger._save_user_state(user_key, state)
-        return jsonify({'success': True, 'message': f"State reset for {user_key}"})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=8080)
