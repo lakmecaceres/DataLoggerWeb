@@ -423,7 +423,7 @@ class DataLogger:
             raise ValueError("Nuclei concentration must be a positive number.")
 
         try:
-            _vol_str = str(form_data.get('nuclei_volume', '')).strip()
+            _vol_str = str(form_data.get('nuclei_volume', '')).replace(',', '').strip()
             if not _vol_str:
                 raise ValueError()
             _vol = float(_vol_str)
@@ -596,7 +596,7 @@ class DataLogger:
             try:
                 slab_part = f"Slab{int(slab)}"
             except (ValueError, TypeError):
-                slab_part = f"Slab{slab}"
+                slab_part = f"Slab{str(slab).strip()}"
         tile_part = f"Tile{int(tile)}" if str(tile).isdigit() else tile
 
         krienen_lab_identifier = (
