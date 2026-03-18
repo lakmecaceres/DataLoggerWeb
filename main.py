@@ -391,13 +391,112 @@ class DataLogger:
         sort_method = sort_method.upper() if sort_method.lower() == "dapi" else sort_method
 
         if sort_method.lower() == "pooled":
-            facs_population = form_data['facs_population']
+            facs_population = form_data['facs_population'].strip()
         elif sort_method.lower() == "unsorted":
             facs_population = "no_FACS"
         else:
             facs_population = "DAPI"
 
         rxn_number = int(form_data['rxn_number'])
+
+        # Determine modalities early (required for validation below)
+        _modalities = ["RNA"] if project == "HMBA_Aim4" else ["RNA", "ATAC"]
+
+        # --- Validation block ---
+
+        # 1. Numeric field validation
+        try:
+            _er = int(form_data.get('expected_recovery', ''))
+            if _er <= 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise ValueError("Expected recovery must be a positive integer.")
+
+        try:
+            _conc_str = str(form_data.get('nuclei_concentration', '')).replace(',', '').strip()
+            if not _conc_str:
+                raise ValueError()
+            _conc = float(_conc_str)
+            if _conc <= 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise ValueError("Nuclei concentration must be a positive number.")
+
+        try:
+            _vol_str = str(form_data.get('nuclei_volume', '')).strip()
+            if not _vol_str:
+                raise ValueError()
+            _vol = float(_vol_str)
+            if _vol <= 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise ValueError("Nuclei volume must be a positive number.")
+
+        # 2. Comma-separated reaction-linked field validation
+        def _check_comma_field(field, label):
+            val = form_data.get(field, '')
+            tokens = [t.strip() for t in val.split(',')]
+            if any(t == '' for t in tokens):
+                raise ValueError(
+                    f"'{label}' contains empty values (check for trailing or consecutive commas)."
+                )
+            if len(tokens) != rxn_number:
+                raise ValueError(
+                    f"'{label}' must have exactly {rxn_number} value(s), got {len(tokens)}."
+                )
+
+        for _field, _label in [
+            ('cdna_concentration', 'cDNA concentration'),
+            ('percent_cdna_400bp', 'Percent cDNA >400bp'),
+            ('rna_lib_concentration', 'RNA library concentration'),
+            ('cdna_pcr_cycles', 'cDNA PCR cycles'),
+            ('rna_sizes', 'RNA sizes'),
+            ('library_cycles_rna', 'Library cycles (RNA)'),
+        ]:
+            _check_comma_field(_field, _label)
+
+        if "ATAC" in _modalities:
+            for _field, _label in [
+                ('atac_lib_concentration', 'ATAC library concentration'),
+                ('atac_sizes', 'ATAC sizes'),
+                ('library_cycles_atac', 'Library cycles (ATAC)'),
+            ]:
+                _check_comma_field(_field, _label)
+
+        # 3. Index validation: parse, check for empty tokens, validate format via convert_index
+        def _parse_indices(raw, label):
+            tokens = [t.strip() for t in raw.split(',')]
+            if any(t == '' for t in tokens):
+                raise ValueError(
+                    f"{label} contains empty values (check for trailing or consecutive commas)."
+                )
+            if len(tokens) != rxn_number:
+                raise ValueError(
+                    f"{label} must have exactly {rxn_number} value(s), got {len(tokens)}."
+                )
+            converted = [self.convert_index(t) for t in tokens]
+            invalid = [t for t, c in zip(tokens, converted) if c is None]
+            if invalid:
+                raise ValueError(
+                    f"Invalid {label} format: {', '.join(invalid)}. "
+                    f"Expected formats: 'A1', 'B12', '12A'."
+                )
+            return [self.pad_index(c) for c in converted]
+
+        _rna_raw = form_data.get('rna_indices', '').strip()
+        if not _rna_raw:
+            raise ValueError("RNA indices are required.")
+        _rna_indices = _parse_indices(_rna_raw, "RNA indices")
+
+        if "ATAC" in _modalities:
+            _atac_raw = form_data.get('atac_indices', '').strip()
+            if not _atac_raw:
+                raise ValueError("ATAC indices are required.")
+            _atac_indices = _parse_indices(_atac_raw, "ATAC indices")
+        else:
+            _atac_indices = []
+
+        # --- End validation block ---
 
         # Derive per-date chip usage directly from sheet for source-of-truth
         chips_map, last_chip_on_date, last_used_on_date = self._sheet_date_chip_usage(ws, current_date)
@@ -431,15 +530,13 @@ class DataLogger:
         # Persist date usage back into chips_map for this run (in-memory, source-of-truth is the sheet we’re writing)
         chips_map.update(updates_for_date)
 
-        # Indices
-        atac_indices = [self.convert_index(i) for i in form_data['atac_indices'].split(",")] if form_data.get('atac_indices') else []
-        atac_indices = [self.pad_index(i) for i in atac_indices]
-        rna_indices = [self.convert_index(i) for i in form_data['rna_indices'].split(",")] if form_data.get('rna_indices') else []
-        rna_indices = [self.pad_index(i) for i in rna_indices]
+        # Indices — use pre-validated results from validation block above
+        rna_indices = _rna_indices
+        atac_indices = _atac_indices
 
         dup_index_counter = {}
         headers = [cell.value for cell in ws[1]]
-        modalities = ["RNA"] if project == "HMBA_Aim4" else ["RNA", "ATAC"]
+        modalities = _modalities
 
         if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label:
             slab_for_tissue = combined_slab_label
@@ -496,7 +593,10 @@ class DataLogger:
                     unpadded.append(s)
             slab_part = f"Slabs_{'_'.join(unpadded)}"
         else:
-            slab_part = f"Slab{int(slab)}"
+            try:
+                slab_part = f"Slab{int(slab)}"
+            except (ValueError, TypeError):
+                slab_part = f"Slab{slab}"
         tile_part = f"Tile{int(tile)}" if str(tile).isdigit() else tile
 
         krienen_lab_identifier = (
@@ -524,7 +624,7 @@ class DataLogger:
 
         seq_portal = "no"
         elab_link = form_data.get('elab_link', '')
-        facs_population = form_data.get('facs_population', 'no_FACS')
+        facs_population = (form_data.get('facs_population') or 'no_FACS').strip()
         cell_prep_type = "nuclei"
 
         library_prep_date = (self.convert_date(form_data['rna_prep_date']) if modality == "RNA"
