@@ -1,501 +1,236 @@
-import sys
+from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, make_response
 import os
+import io
+import re
 import json
-import getpass
-from datetime import datetime, timezone
+from datetime import datetime
+import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QLabel, QLineEdit, QComboBox, QPushButton, QScrollArea,
-                             QMessageBox, QGridLayout, QTabWidget, QFileDialog,
-                             QFrame, QListView, QInputDialog)
-from PyQt6.QtCore import Qt, QTimer, QEvent
-from PyQt6.QtGui import QPalette, QColor, QCursor
+from openpyxl import Workbook, load_workbook
+import dateutil.parser
+
+# Optional GCS support
+GCS_BUCKET = os.getenv("GCS_BUCKET", "").strip()
+GCS_ENABLED = bool(GCS_BUCKET)
+if GCS_ENABLED:
+    from google.cloud import storage
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'marmoset'
 
 
-class FocusLineEdit(QLineEdit):
-    """Custom QLineEdit with enhanced focus visualization"""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.setStyleSheet("""
-            QLineEdit {
-                border: 1px solid #ababab;
-                border-radius: 3px;
-                padding: 2px;
-                background-color: white;
-            }
-            QLineEdit:focus {
-                border: 2px solid #0078d7;
-                background-color: #e5f1fb;
-            }
-        """)
-
-
-class FocusComboBox(QComboBox):
-    """Custom QComboBox with enhanced focus visualization"""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.setView(QListView())
-
-        self.setStyleSheet("""
-            QComboBox {
-                border: 1px solid #ababab;
-                border-radius: 3px;
-                padding: 1px 18px 1px 3px;
-                min-width: 6em;
-                background-color: white;
-            }
-            QComboBox:focus {
-                border: 2px solid #0078d7;
-                background-color: #e5f1fb;
-            }
-            QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 15px;
-                border-left-width: 1px;
-                border-left-color: darkgray;
-                border-left-style: solid;
-                border-top-right-radius: 3px;
-                border-bottom-right-radius: 3px;
-            }
-
-            QComboBox QAbstractItemView {
-                background: white;
-                border: 1px solid #ababab;
-                selection-background-color: #0078d7;
-                selection-color: white;
-            }
-
-            QComboBox QAbstractItemView::item {
-                background-color: white;
-                color: black;
-                padding: 4px;
-            }
-
-            QComboBox QAbstractItemView::item:hover {
-                background-color: #e5f1fb;
-                color: black;
-            }
-
-            QComboBox QAbstractItemView::item:selected {
-                background-color: #0078d7;
-                color: white;
-            }
-        """)
-
-
-class DataLogGUI(QMainWindow):
+class DataLogger:
     def __init__(self):
-        super().__init__()
-        if sys.platform == "darwin":
-            self.config_dir = os.path.join(os.path.expanduser('~'), 'Library', 'Application Support', 'DataLogApp')
-        else:
-            self.config_dir = os.path.join(os.path.expanduser('~'), '.DataLogApp')
-
+        # Local storage (fallback when GCS not enabled)
+        self.config_dir = os.path.join(os.path.expanduser('~'), 'DataLogApp')
         os.makedirs(self.config_dir, exist_ok=True)
-        self.config_file = os.path.join(self.config_dir, 'config.json')
-        self.file_location = None
-        self.workbook_path = None
-        self.setWindowTitle("Krienen Data Logger")
+        self.counter_file = os.path.join(self.config_dir, 'sample_name_counter.json')
+
+        # GCS client
+        self.storage_client = storage.Client() if GCS_ENABLED else None
 
         self.name_to_code = {
+            "Petra": "CJ23.56.001",
             "Croissant": "CJ23.56.002",
             "Nutmeg": "CJ23.56.003",
-            "Jellybean": "CJ24.56.001",
+            "Tank": "CJ23.56.004",
+            "JellyBean": "CJ24.56.001",
+            "Pringle": "CJ24.56.002",
+            "Paarl": "CJ24.56.003",
             "Rambo": "CJ24.56.004",
-            "Morel": "CJ24.56.015"
+            "Clack": "CJ24.56.005",
+            "Porthos": "CJ24.56.006",
+            "Deegan": "CJ24.56.007",
+            "Dangerboy": "CJ24.56.008",
+            "Hildegard": "CJ24.56.009",
+            "Villopoto": "CJ24.56.010",
+            "Pathy": "CJ24.56.011",
+            "Toki": "CJ24.56.012",
+            "Georgia": "CJ24.56.013",
+            "Carmichael": "CJ24.56.014",
+            "Morel": "CJ24.56.015",
+            "Orion": "CJ24.56.016",
+            "EllieMae": "CJ24.56.017",
+            "Lambert": "CJ24.56.018",
+            "Ocean": "CJ25.56.001",
+            "Stella": "CJ25.56.002",
+            "Wyatt": "CJ25.56.003",
+            "Piglet": "CJ25.56.004",
+            "Moira": "CJ25.56.005",
+            "Willow": "CJ25.56.006",
+            "Wren": "CJ25.56.007",
+            "Valentino": "CJ25.56.008",
+            "Misty": "CJ25.56.009",
+            "Link": "CJ25.56.010",
+            "Owlette": "CJ25.56.011",
+            "Chickpea": "CJ25.56.012",
+            "Benedict": "CJ25.56.013",
+            "Vera": "CJ25.56.014",
+            "Tango": "CJ25.56.015",
+            "Paris": "CJ25.56.016",
+            "Lapras": "CJ25.56.017"
         }
 
-        self.tile_location_map = {
-            "BRAINSTEM": "BS",
-            "BS": "BS",
-            "CORTEX": "CX",
-            "CX": "CX",
-            "CEREBELLUM": "CB",
-            "CB": "CB"
-        }
-
-        self.init_ui()
-        QTimer.singleShot(0, self.delayed_init)
-
-    def delayed_init(self):
-        if getattr(sys, 'frozen', False):
-            self.script_dir = os.path.dirname(sys.executable)
-        else:
-            self.script_dir = os.path.dirname(os.path.abspath(__file__))
-
-        self.COUNTER_FILE = os.path.join(self.script_dir, 'sample_name_counter.json')
         self.black_fill = PatternFill(start_color='000000', fill_type='solid')
-        self.default_font = Font(name="Arial", size=10)
-        self.bold_font = Font(name="Arial", size=10, bold=True)
 
-        self.load_counter_data()
-        self.setup_enter_key_navigation()
+    # ----------------- User key and object names -----------------
 
-    def get_save_location(self):
-        if os.path.exists(self.config_file):
-            with open(self.config_file, 'r') as f:
-                config = json.load(f)
-                return config.get('file_location')
+    def _safe_user_key(self, name: str) -> str:
+        name = (name or "").strip()
+        if not name:
+            return "unknown"
+        return re.sub(r'[^A-Za-z0-9_-]+', '_', name) or "unknown"
 
-        file_name, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Excel File",
-            os.path.expanduser('~'),
-            "Excel Files (*.xlsx);;All Files (*)"
-        )
+    # ----------------- Workbook storage helpers (GCS/local) -----------------
 
-        if file_name:
-            try:
-                with open(self.config_file, 'w') as f:
-                    json.dump({'file_location': file_name}, f)
-            except IOError as e:
-                QMessageBox.critical(self, "Error", f"Failed to write config file: {str(e)}")
+    def _new_object_name(self, user_key: str) -> str:
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        return f"logs/{user_key}/{user_key}_krienen_data_log_{ts}.xlsx"
 
-        return file_name
-
-    def save_data(self):
-        from openpyxl import Workbook
-
-        if not self.file_location:
-            self.file_location = self.get_save_location()
-
-        if not self.file_location:
-            QMessageBox.critical(self, "Error", "No save location specified!")
-            return
-
-        file_location = self.file_location
-        if not file_location.endswith('.xlsx'):
-            file_location += '.xlsx'
-
-        try:
-            wb = Workbook()
-            ws = wb.active
-
-            headers = ['krienen_lab_identifier', 'seq_portal', 'elab_link']
-            ws.append(headers)
-
-            data_row = [
-                self.krienen_lab_identifier,
-                self.seq_portal,
-                self.get_current_time(),
-                self.get_current_user()
-            ]
-            ws.append(data_row)
-
-            for cell in ws[1]:
-                cell.font = Font(bold=True)
-
-            wb.save(file_location)
-            QMessageBox.information(self, "Success", "Data saved successfully!")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save file: {str(e)}")
-
-    def get_current_time(self):
-        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-    def get_current_user(self):
-        return getpass.getuser()
-
-    def init_ui(self):
-        self.setGeometry(100, 100, 800, 600)
-
-        main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        main_layout = QVBoxLayout(main_widget)
-
-        title_frame = QFrame()
-        title_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        title_frame.setStyleSheet("background-color: #f0f0f0; padding: 5px;")
-        title_layout = QVBoxLayout(title_frame)
-        title_label = QLabel("Krienen Lab Data Logger")
-        title_label.setStyleSheet("font-size: 16pt; font-weight: bold;")
-        title_layout.addWidget(title_label)
-        main_layout.addWidget(title_frame)
-
-        self.tab_widget = QTabWidget()
-        main_layout.addWidget(self.tab_widget)
-
-        tissue_tab = QWidget()
-        facs_tab = QWidget()
-        library_tab = QWidget()
-        indices_tab = QWidget()
-
-        self.setup_basic_tab(tissue_tab)
-        self.setup_facs_tab(facs_tab)
-        self.setup_library_tab(library_tab)
-        self.setup_indices_tab(indices_tab)
-
-        self.tab_widget.addTab(tissue_tab, "Tissue")
-        self.tab_widget.addTab(facs_tab, "FACS")
-        self.tab_widget.addTab(library_tab, "cDNA")
-        self.tab_widget.addTab(indices_tab, "Libraries")
-
-        self.submit_btn = QPushButton('Submit')
-        self.submit_btn.clicked.connect(self.on_submit)
-        self.submit_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0078d7;
-                color: white;
-                font-weight: bold;
-                padding: 8px;
-                border-radius: 4px;
-                min-width: 100px;
-            }
-            QPushButton:hover {
-                background-color: #0063b1;
-            }
-            QPushButton:pressed {
-                background-color: #004e8c;
-            }
-        """)
-        main_layout.addWidget(self.submit_btn, alignment=Qt.AlignmentFlag.AlignCenter)
-
-    def setup_enter_key_navigation(self):
-        self.input_widgets = []
-        for tab_index in range(self.tab_widget.count()):
-            tab = self.tab_widget.widget(tab_index)
-            for child in tab.findChildren(QWidget):
-                if isinstance(child, QLineEdit):
-                    self.input_widgets.append(child)
-                    child.returnPressed.connect(self.on_return_pressed)
-                elif isinstance(child, QComboBox):
-                    self.input_widgets.append(child)
-                    child.installEventFilter(self)
-
-    def on_return_pressed(self):
-        sender = self.sender()
-        if sender in self.input_widgets:
-            self.move_to_next_widget(sender)
-
-    def eventFilter(self, obj, event):
-        if (event.type() == QEvent.Type.KeyPress and
-                isinstance(obj, QComboBox) and
-                event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)):
-            self.move_to_next_widget(obj)
-            return True
-        return super().eventFilter(obj, event)
-
-    def move_to_next_widget(self, current_widget):
-        try:
-            current_index = self.input_widgets.index(current_widget)
-            next_index = (current_index + 1) % len(self.input_widgets)
-            next_widget = self.input_widgets[next_index]
-
-            for tab_index in range(self.tab_widget.count()):
-                tab = self.tab_widget.widget(tab_index)
-                if self.widget_is_in_tab(next_widget, tab):
-                    if tab_index != self.tab_widget.currentIndex():
-                        self.tab_widget.setCurrentIndex(tab_index)
-                    break
-
-            next_widget.setFocus()
-        except (ValueError, IndexError):
-            pass
-
-    def widget_is_in_tab(self, widget, tab):
-        if widget is tab:
-            return True
-        if widget in tab.findChildren(widget.__class__):
-            return True
-        parent = widget.parent()
-        while parent:
-            if parent is tab:
-                return True
-            parent = parent.parent()
-        return False
-
-    def setup_basic_tab(self, tab):
-        layout = QGridLayout()
-
-        self.project_input = FocusComboBox()
-        self.project_input.addItems(["HMBA_CjAtlas_Subcortex", "Other"])
-        self.project_input.currentTextChanged.connect(self.on_project_change)
-        layout.addWidget(QLabel("Project:"), 0, 0)
-        layout.addWidget(self.project_input, 0, 1)
-        self.project_name_input = FocusLineEdit()
-        self.project_name_input.setVisible(False)
-        layout.addWidget(self.project_name_input, 0, 2)
-
-        self.date_input = FocusLineEdit()
-        self.date_input.setPlaceholderText("YYMMDD or MM/DD/YY")
-        layout.addWidget(QLabel("Experiment Date:"), 1, 0)
-        layout.addWidget(self.date_input, 1, 1)
-
-        self.marmoset_input = FocusComboBox()
-        self.marmoset_input.addItems(self.name_to_code.keys())
-        layout.addWidget(QLabel("Marmoset Name:"), 2, 0)
-        layout.addWidget(self.marmoset_input, 2, 1)
-
-        self.hemisphere_input = FocusComboBox()
-        self.hemisphere_input.addItems(["Left (LH)", "Right (RH)", "Both"])
-        layout.addWidget(QLabel("Hemisphere:"), 3, 0)
-        layout.addWidget(self.hemisphere_input, 3, 1)
-
-        self.tile_location_input = FocusComboBox()
-        self.tile_location_input.addItems(["BS", "CX", "CB"])
-        layout.addWidget(QLabel("Tile Location:"), 4, 0)
-        layout.addWidget(self.tile_location_input, 4, 1)
-
-        self.slab_input = FocusLineEdit()
-        self.slab_input.setPlaceholderText("Enter numeric value")
-        layout.addWidget(QLabel("Slab Number:"), 5, 0)
-        layout.addWidget(self.slab_input, 5, 1)
-
-        self.tile_input = FocusLineEdit()
-        self.tile_input.setPlaceholderText("Enter numeric or alphanumeric value")
-        layout.addWidget(QLabel("Tile Number:"), 6, 0)
-        layout.addWidget(self.tile_input, 6, 1)
-
-        tab.setLayout(layout)
-
-    def setup_facs_tab(self, tab):
-        layout = QGridLayout()
-
-        self.sorter_initials_input = FocusLineEdit()
-        self.sorter_initials_input.setPlaceholderText("Enter sorter's initials")
-        layout.addWidget(QLabel("Sorter Initials:"), 0, 0)
-        layout.addWidget(self.sorter_initials_input, 0, 1)
-
-        self.sort_method_input = FocusComboBox()
-        self.sort_method_input.addItems(["pooled", "unsorted", "DAPI"])
-        self.sort_method_input.currentTextChanged.connect(self.on_sort_method_change)
-        layout.addWidget(QLabel("Sort Method:"), 1, 0)
-        layout.addWidget(self.sort_method_input, 1, 1)
-
-        self.facs_population_input = FocusLineEdit()
-        self.facs_population_input.setPlaceholderText("Format: XX/XX/XX (e.g., 70/20/10)")
-        layout.addWidget(QLabel("FACS Population:"), 2, 0)
-        layout.addWidget(self.facs_population_input, 2, 1)
-
-        self.rxn_number_input = FocusLineEdit()
-        self.rxn_number_input.setPlaceholderText("Enter number of reactions")
-        layout.addWidget(QLabel("Number of Reactions:"), 3, 0)
-        layout.addWidget(self.rxn_number_input, 3, 1)
-
-        self.expected_recovery_input = FocusLineEdit()
-        layout.addWidget(QLabel("Expected Recovery:"), 4, 0)
-        layout.addWidget(self.expected_recovery_input, 4, 1)
-
-        self.nuclei_concentration_input = FocusLineEdit()
-        layout.addWidget(QLabel("Nuclei Concentration:"), 5, 0)
-        layout.addWidget(self.nuclei_concentration_input, 5, 1)
-
-        self.nuclei_volume_input = FocusLineEdit()
-        self.nuclei_volume_input.setPlaceholderText("Enter nuclei volume in µL")
-        layout.addWidget(QLabel("Nuclei Volume (µL):"), 6, 0)
-        layout.addWidget(self.nuclei_volume_input, 6, 1)
-
-        tab.setLayout(layout)
-
-    def setup_library_tab(self, tab):
-        layout = QGridLayout()
-
-        self.atac_prep_date_input = FocusLineEdit()
-        self.atac_prep_date_input.setPlaceholderText("YYMMDD or MM/DD/YY")
-        layout.addWidget(QLabel("ATAC Library Prep Date:"), 0, 0)
-        layout.addWidget(self.atac_prep_date_input, 0, 1)
-
-        self.cdna_amp_date_input = FocusLineEdit()
-        self.cdna_amp_date_input.setPlaceholderText("YYMMDD or MM/DD/YY")
-        layout.addWidget(QLabel("cDNA Amplification Date:"), 1, 0)
-        layout.addWidget(self.cdna_amp_date_input, 1, 1)
-
-        self.rna_prep_date_input = FocusLineEdit()
-        self.rna_prep_date_input.setPlaceholderText("YYMMDD or MM/DD/YY")
-        layout.addWidget(QLabel("cDNA Library Prep Date:"), 2, 0)
-        layout.addWidget(self.rna_prep_date_input, 2, 1)
-
-        self.cdna_pcr_cycles_input = FocusLineEdit()
-        self.cdna_pcr_cycles_input.setPlaceholderText("Comma-separated values")
-        layout.addWidget(QLabel("cDNA PCR Cycles:"), 3, 0)
-        layout.addWidget(self.cdna_pcr_cycles_input, 3, 1)
-
-        self.cdna_concentration_input = FocusLineEdit()
-        self.cdna_concentration_input.setPlaceholderText("Comma-separated values (ng/µL)")
-        layout.addWidget(QLabel("cDNA Concentration:"), 4, 0)
-        layout.addWidget(self.cdna_concentration_input, 4, 1)
-
-        self.percent_cdna_400bp_input = FocusLineEdit()
-        self.percent_cdna_400bp_input.setPlaceholderText("Comma-separated values")
-        layout.addWidget(QLabel("Percent cDNA > 400bp:"), 5, 0)
-        layout.addWidget(self.percent_cdna_400bp_input, 5, 1)
-
-        tab.setLayout(layout)
-
-    def on_sort_method_change(self, value):
-        if value.lower() == "pooled":
-            self.facs_population_input.setEnabled(True)
-            self.facs_population_input.setPlaceholderText("Format: XX/XX/XX (e.g., 70/20/10)")
-        elif value.lower() == "unsorted":
-            self.facs_population_input.setEnabled(False)
-            self.facs_population_input.setText("no_FACS")
-        else:
-            self.facs_population_input.setEnabled(False)
-            self.facs_population_input.setText("DAPI")
-
-    def on_project_change(self, value):
-        self.project_name_input.setVisible(value == "Other")
-
-    def load_counter_data(self):
-        if os.path.exists(self.COUNTER_FILE):
-            with open(self.COUNTER_FILE, 'r') as f:
+    def _load_pointer(self, user_key: str):
+        if GCS_ENABLED:
+            bucket = self.storage_client.bucket(GCS_BUCKET)
+            blob = bucket.blob(f"pointers/{user_key}.json")
+            if blob.exists():
                 try:
-                    self.counter_data = json.load(f)
-                except json.JSONDecodeError:
-                    self.counter_data = {}
+                    data = json.loads(blob.download_as_text())
+                    if isinstance(data, dict) and data.get("object"):
+                        return data["object"]
+                except Exception:
+                    pass
+        # local fallback mapping (optional)
+        mapping = self._load_local_meta().get("current_log_objects", {})
+        return mapping.get(user_key)
+
+    def _save_pointer(self, user_key: str, object_name: str):
+        if GCS_ENABLED:
+            bucket = self.storage_client.bucket(GCS_BUCKET)
+            blob = bucket.blob(f"pointers/{user_key}.json")
+            blob.upload_from_string(json.dumps({"object": object_name}, indent=2), content_type="application/json")
+        meta = self._load_local_meta()
+        meta.setdefault("current_log_objects", {})[user_key] = object_name
+        self._save_local_meta(meta)
+
+    def _download_workbook(self, object_name):
+        if GCS_ENABLED:
+            bucket = self.storage_client.bucket(GCS_BUCKET)
+            blob = bucket.blob(object_name)
+            if blob.exists():
+                data = blob.download_as_bytes()
+                wb = load_workbook(io.BytesIO(data))
+                return wb, blob.generation
+            else:
+                wb = self._initialize_excel()
+                return wb, None
         else:
-            self.counter_data = {}
+            local_path = os.path.join(self.config_dir, object_name.replace("/", os.sep))
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            if os.path.exists(local_path):
+                wb = load_workbook(local_path)
+            else:
+                wb = self._initialize_excel()
+            return wb, None
 
-        self.counter_data.setdefault("date_info", {})
-        self.counter_data.setdefault("amp_counter", {})
+    def _upload_workbook(self, wb, object_name, if_generation_match=None):
+        if GCS_ENABLED:
+            bucket = self.storage_client.bucket(GCS_BUCKET)
+            blob = bucket.blob(object_name)
+            out = io.BytesIO()
+            wb.save(out)
+            out.seek(0)
+            if if_generation_match is not None:
+                blob.upload_from_file(
+                    out,
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    if_generation_match=if_generation_match
+                )
+            else:
+                blob.upload_from_file(
+                    out,
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+        else:
+            local_path = os.path.join(self.config_dir, object_name.replace("/", os.sep))
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            wb.save(local_path)
 
-    def setup_indices_tab(self, tab):
-        layout = QGridLayout()
+    def _download_workbook_bytes(self, object_name):
+        if GCS_ENABLED:
+            bucket = self.storage_client.bucket(GCS_BUCKET)
+            blob = bucket.blob(object_name)
+            if blob.exists():
+                return blob.download_as_bytes()
+            else:
+                wb = self._initialize_excel()
+                out = io.BytesIO()
+                wb.save(out)
+                return out.getvalue()
+        else:
+            local_path = os.path.join(self.config_dir, object_name.replace("/", os.sep))
+            if os.path.exists(local_path):
+                with open(local_path, 'rb') as f:
+                    return f.read()
+            else:
+                wb = self._initialize_excel()
+                out = io.BytesIO()
+                wb.save(out)
+                return out.getvalue()
 
-        self.atac_indices_input = FocusLineEdit()
-        self.atac_indices_input.setPlaceholderText("Comma-separated values (e.g., D4,E5,F6)")
-        layout.addWidget(QLabel("ATAC Indices:"), 0, 0)
-        layout.addWidget(self.atac_indices_input, 0, 1)
+    # ----------------- Per-user state (local meta fallback only) -----------------
 
-        self.library_cycles_atac_input = FocusLineEdit()
-        self.library_cycles_atac_input.setPlaceholderText("Comma-separated values")
-        layout.addWidget(QLabel("ATAC Library Cycles:"), 1, 0)
-        layout.addWidget(self.library_cycles_atac_input, 1, 1)
+    def _load_local_meta(self):
+        if os.path.exists(self.counter_file):
+            try:
+                with open(self.counter_file, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
 
-        self.atac_lib_concentration_input = FocusLineEdit()
-        self.atac_lib_concentration_input.setPlaceholderText("Comma-separated values (ng/µL)")
-        layout.addWidget(QLabel("ATAC Library Concentration:"), 2, 0)
-        layout.addWidget(self.atac_lib_concentration_input, 2, 1)
+    def _save_local_meta(self, meta: dict):
+        with open(self.counter_file, 'w') as f:
+            json.dump(meta, f, indent=4)
 
-        self.atac_sizes_input = FocusLineEdit()
-        self.atac_sizes_input.setPlaceholderText("Comma-separated values")
-        layout.addWidget(QLabel("ATAC Library Sizes (bp):"), 3, 0)
-        layout.addWidget(self.atac_sizes_input, 3, 1)
+    # ----------------- Core utilities -----------------
 
-        self.rna_indices_input = FocusLineEdit()
-        self.rna_indices_input.setPlaceholderText("Comma-separated values (e.g., A1,B2,C3)")
-        layout.addWidget(QLabel("cDNA Indices:"), 4, 0)
-        layout.addWidget(self.rna_indices_input, 4, 1)
+    def _headers(self):
+        return ['krienen_lab_identifier', 'seq_portal', 'elab_link', 'experiment_start_date',
+                'mit_name', 'donor_name', 'tissue_name', 'tissue_name_old',
+                'dissociated_cell_sample_name', 'facs_population_plan', 'cell_prep_type',
+                'study', 'enriched_cell_sample_container_name', 'expc_cell_capture',
+                'port_well', 'enriched_cell_sample_name', 'enriched_cell_sample_quantity_count',
+                'barcoded_cell_sample_name', 'library_method', 'cDNA_amplification_method',
+                'cDNA_amplification_date', 'amplified_cdna_name', 'cDNA_pcr_cycles',
+                'rna_amplification_pass_fail', 'percent_cdna_longer_than_400bp',
+                'cdna_amplified_quantity_ng', 'cDNA_library_input_ng', 'library_creation_date',
+                'library_prep_set', 'library_name', 'tapestation_avg_size_bp',
+                'library_num_cycles', 'lib_quantification_ng', 'library_prep_pass_fail',
+                'r1_index', 'r2_index', 'ATAC_index']
 
-        self.library_cycles_rna_input = FocusLineEdit()
-        self.library_cycles_rna_input.setPlaceholderText("Comma-separated values")
-        layout.addWidget(QLabel("cDNA Library Cycles:"), 5, 0)
-        layout.addWidget(self.library_cycles_rna_input, 5, 1)
+    def _initialize_excel(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "HMBA"
+        ws.append(self._headers())
+        for col_num in range(1, len(self._headers()) + 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.font = Font(name="Arial", size=10, bold=True)
+            cell.alignment = Alignment(horizontal='left')
+        return wb
 
-        self.rna_lib_concentration_input = FocusLineEdit()
-        self.rna_lib_concentration_input.setPlaceholderText("Comma-separated values (ng/µL)")
-        layout.addWidget(QLabel("cDNA Library Concentration:"), 6, 0)
-        layout.addWidget(self.rna_lib_concentration_input, 6, 1)
-
-        self.rna_sizes_input = FocusLineEdit()
-        self.rna_sizes_input.setPlaceholderText("Comma-separated values")
-        layout.addWidget(QLabel("cDNA Library Sizes (bp):"), 7, 0)
-        layout.addWidget(self.rna_sizes_input, 7, 1)
-
-        tab.setLayout(layout)
+    def convert_date(self, exp_date):
+        clean = "".join(c for c in exp_date if c.isdigit())
+        if len(clean) == 6:
+            try:
+                datetime.strptime(clean, '%y%m%d')
+                return clean
+            except ValueError:
+                pass
+        try:
+            parsed = dateutil.parser.parse(exp_date)
+            return parsed.strftime('%y%m%d')
+        except ValueError:
+            return None
 
     def convert_index(self, index):
         index = index.strip().upper()
@@ -516,320 +251,331 @@ class DataLogGUI(QMainWindow):
             return f"{index[0]}0{index[1]}"
         return index
 
-    def convert_date(self, exp_date):
-        import dateutil.parser
-        from datetime import datetime
+    # ----------------- Sheet-derived state helpers -----------------
 
-        clean_date = "".join(c for c in exp_date if c.isdigit())
-        if len(clean_date) == 6:
-            try:
-                datetime.strptime(clean_date, '%y%m%d')
-                return clean_date
-            except ValueError:
-                pass
-        try:
-            parsed_date = dateutil.parser.parse(exp_date)
-            return parsed_date.strftime('%y%m%d')
-        except ValueError:
-            return None
+    def _sheet_date_chip_usage(self, ws, current_date):
+        """
+        Scan the sheet for rows with experiment_start_date == current_date
+        and build a map of chip -> highest used well for that date.
+        barcoded_cell_sample_name format: 'P####_##'
+        """
+        headers = [cell.value for cell in ws[1]]
+        date_col = headers.index('experiment_start_date') + 1
+        bcsn_col = headers.index('barcoded_cell_sample_name') + 1
 
-    def validate_inputs(self):
-        current_date = self.convert_date(self.date_input.text())
-        if not current_date:
-            QMessageBox.warning(self, "Validation Error", "Please enter a valid date.")
-            return False
+        chips_map = {}  # chip_str -> used_wells (int)
+        last_chip = None
+        last_used = 0
 
-        try:
-            rxn_number = int(self.rxn_number_input.text())
-            if rxn_number <= 0:
-                raise ValueError
-        except ValueError:
-            QMessageBox.warning(self, "Validation Error", "Please enter a valid number of reactions.")
-            return False
+        for row_idx in range(2, ws.max_row + 1):
+            date_val = ws.cell(row=row_idx, column=date_col).value
+            if date_val != current_date:
+                continue
+            name_val = ws.cell(row=row_idx, column=bcsn_col).value
+            if not name_val or not isinstance(name_val, str):
+                continue
+            m = re.match(r'^P(\d{4})_(\d)$', name_val)
+            if not m:
+                continue
+            chip = int(m.group(1))
+            well = int(m.group(2))
+            chips_map[str(chip)] = max(well, int(chips_map.get(str(chip), 0)))
+        if chips_map:
+            # Highest chip that has entries on this date
+            last_chip = max(int(c) for c in chips_map.keys())
+            last_used = int(chips_map[str(last_chip)])
+        return chips_map, last_chip, last_used
 
-        try:
-            int(self.slab_input.text())
-        except ValueError:
-            QMessageBox.warning(self, "Validation Error", "Slab number must be a numeric value.")
-            return False
+    def _next_amp_name(self, ws, amp_prefix, amp_date):
+        """
+        Determine the next amplified_cdna_name by scanning existing rows in the sheet:
+        pattern: f"{amp_prefix}_{amp_date}_{batch}_{letter}"
+        letter cycles A..H; after H, batch increments.
+        """
+        headers = [cell.value for cell in ws[1]]
+        amp_name_col = headers.index('amplified_cdna_name') + 1
 
-        tile_value = self.tile_input.text().strip()
-        if not tile_value:
-            QMessageBox.warning(self, "Validation Error", "Tile value cannot be empty.")
-            return False
+        last_batch = 0
+        last_letter = None  # 'A'..'H'
 
-        if self.sort_method_input.currentText().lower() == "pooled":
-            proportions = self.facs_population_input.text().strip()
-            if "/" not in proportions:
-                QMessageBox.warning(self, "Validation Error",
-                                    "Please enter FACS population proportions in format XX/XX/XX")
-                return False
-            try:
-                proportions_list = [int(p) for p in proportions.split("/")]
-                if len(proportions_list) != 3 or sum(proportions_list) != 100:
-                    raise ValueError
-            except ValueError:
-                QMessageBox.warning(self, "Validation Error",
-                                    "FACS proportions must be three numbers that sum to 100")
-                return False
+        for row_idx in range(2, ws.max_row + 1):
+            val = ws.cell(row=row_idx, column=amp_name_col).value
+            if not val or not isinstance(val, str):
+                continue
+            # Example: APLCTX_251001_1_G
+            m = re.match(rf'^{re.escape(amp_prefix)}_{re.escape(amp_date)}_(\d+)_([A-H])$', val)
+            if not m:
+                continue
+            b = int(m.group(1))
+            L = m.group(2)
+            if b > last_batch or (b == last_batch and (last_letter is None or L > last_letter)):
+                last_batch = b
+                last_letter = L
 
-        for field, field_name in [
-            (self.percent_cdna_400bp_input, "Percent cDNA > 400bp"),
-            (self.cdna_concentration_input, "cDNA concentration"),
-            (self.rna_lib_concentration_input, "RNA library concentration"),
-            (self.atac_lib_concentration_input, "ATAC library concentration")
-        ]:
-            values = field.text().strip().split(',')
-            try:
-                values = [float(x.strip()) for x in values]
-                if len(values) != rxn_number:
-                    QMessageBox.warning(self, "Validation Error",
-                                        f"{field_name} must have {rxn_number} comma-separated values")
-                    return False
-            except ValueError:
-                QMessageBox.warning(self, "Validation Error",
-                                    f"{field_name} values must be numbers")
-                return False
+        if last_batch == 0:
+            # No prior reactions for this amp date
+            return f"{amp_prefix}_{amp_date}_1_A"
 
-        fields_to_validate = [
-            (self.cdna_pcr_cycles_input, "cDNA PCR cycles"),
-            (self.rna_indices_input, "RNA indices"),
-            (self.atac_indices_input, "ATAC indices"),
-            (self.rna_sizes_input, "RNA library sizes"),
-            (self.atac_sizes_input, "ATAC library sizes"),
-            (self.library_cycles_rna_input, "RNA library cycles"),
-            (self.library_cycles_atac_input, "ATAC library cycles")
-        ]
-
-        for field, field_name in fields_to_validate:
-            values = field.text().strip().split(',')
-            if len(values) != rxn_number:
-                QMessageBox.warning(self, "Validation Error",
-                                    f"{field_name} must have {rxn_number} comma-separated values")
-                return False
-
-        return True
-
-    def initialize_excel(self):
-        from openpyxl import Workbook
-        from openpyxl.styles import Font, NamedStyle, Alignment
-
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "HMBA"
-
-        default_style = NamedStyle(name="default_style")
-        default_style.font = Font(name="Arial", size=10)
-        default_style.alignment = Alignment(horizontal='left')
-        if "default_style" not in wb.named_styles:
-            wb.add_named_style(default_style)
-
-        bold_style = NamedStyle(name="bold_style")
-        bold_style.font = Font(name="Arial", size=10, bold=True)
-        bold_style.alignment = Alignment(horizontal='left')
-        if "bold_style" not in wb.named_styles:
-            wb.add_named_style(bold_style)
-
-        headers = ['krienen_lab_identifier', 'seq_portal', 'elab_link', 'experiment_start_date',
-                   'mit_name', 'donor_name', 'tissue_name', 'tissue_name_old',
-                   'dissociated_cell_sample_name', 'facs_population_plan', 'cell_prep_type',
-                   'study', 'enriched_cell_sample_container_name', 'expc_cell_capture',
-                   'port_well', 'enriched_cell_sample_name', 'enriched_cell_sample_quantity_count',
-                   'barcoded_cell_sample_name', 'library_method', 'cDNA_amplification_method',
-                   'cDNA_amplification_date', 'amplified_cdna_name', 'cDNA_pcr_cycles',
-                   'rna_amplification_pass_fail', 'percent_cdna_longer_than_400bp',
-                   'cdna_amplified_quantity_ng', 'cDNA_library_input_ng', 'library_creation_date',
-                   'library_prep_set', 'library_name', 'tapestation_avg_size_bp',
-                   'library_num_cycles', 'lib_quantification_ng', 'library_prep_pass_fail',
-                   'r1_index', 'r2_index', 'ATAC_index']
-
-        ws.append(headers)
-        for col_num, _ in enumerate(headers, start=1):
-            ws.cell(row=1, column=col_num).style = "bold_style"
-
-        return wb
-
-    def process_form_data(self):
-        from openpyxl import load_workbook
-        import pyperclip
-
-        if self.workbook_path and os.path.exists(self.workbook_path):
-            workbook = load_workbook(self.workbook_path)
+        # Compute next letter/batch
+        letters = 'ABCDEFGH'
+        if last_letter is None:
+            # Shouldn't happen but default safely
+            return f"{amp_prefix}_{amp_date}_{last_batch}_A"
+        idx = letters.index(last_letter)
+        if idx < 7:
+            next_letter = letters[idx + 1]
+            next_batch = last_batch
         else:
-            workbook = self.initialize_excel()
+            next_letter = 'A'
+            next_batch = last_batch + 1
 
-        worksheet = workbook.active
+        return f"{amp_prefix}_{amp_date}_{next_batch}_{next_letter}"
 
+    # ----------------- Business logic -----------------
+
+    def process_form_data(self, form_data):
+        # User key
+        user_first_name = (form_data.get('user_first_name') or "").strip()
+        user_key = self._safe_user_key(user_first_name)
+
+        # Ensure per-user current workbook pointer
+        object_name = self._load_pointer(user_key)
+        if not object_name:
+            object_name = self._new_object_name(user_key)
+            self._save_pointer(user_key, object_name)
+
+        # Load workbook
+        wb, generation = self._download_workbook(object_name)
+        ws = wb.active
+
+        # Find next row
         last_row_with_content = 1
-        for row_idx in range(1, worksheet.max_row + 1):
-            if any(cell.value is not None for cell in worksheet[row_idx]):
+        for row_idx in range(1, ws.max_row + 1):
+            if any(cell.value is not None for cell in ws[row_idx]):
                 last_row_with_content = row_idx
         current_row = last_row_with_content + 1
 
-        current_date = self.convert_date(self.date_input.text())
-        mit_name_input = self.marmoset_input.currentText()
+        # Parse inputs
+        current_date = self.convert_date(form_data['date'])
+        mit_name_input = form_data['marmoset']
         mit_name = "cj" + mit_name_input
         donor_name = self.name_to_code[mit_name_input]
+        project = form_data.get('project', '')
 
-        slab = self.slab_input.text().strip()
-        hemisphere = self.hemisphere_input.currentText().split()[0].upper()
-        if hemisphere == "RIGHT":
-            slab = str(int(slab) + 40).zfill(2)
-        elif hemisphere == "BOTH":
-            slab = str(int(slab) + 90).zfill(2)
+        raw_slab = form_data['slab'].strip()
+        hemisphere = form_data['hemisphere'].split()[0].upper()
+
+        if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"}:
+            slab_list = [s.strip().zfill(2) for s in raw_slab.split(',') if s.strip()]
+            if not slab_list:
+                raise ValueError(f"No valid slab numbers provided for {project}")
+            combined_slab_label = "_".join(slab_list)
+            slab_count = len(slab_list)
+            slab = slab_list[0]
         else:
-            slab = slab.zfill(2)
+            combined_slab_label = None
+            slab_count = 1
+            slab = raw_slab
+            if hemisphere == "RIGHT":
+                slab = str(int(slab) + 40).zfill(2)
+            elif hemisphere == "BOTH":
+                slab = str(int(slab) + 90).zfill(2)
+            else:
+                slab = slab.zfill(2)
 
-        tile_value = self.tile_input.text().strip()
-        if tile_value.isdigit():
-            tile = str(int(tile_value)).zfill(2)
-        else:
-            tile = tile_value
+        tile_value = form_data['tile'].strip()
+        tile = str(int(tile_value)).zfill(2) if tile_value.isdigit() else tile_value
 
-        tile_location_abbr = self.tile_location_input.currentText()
-
-        sort_method = self.sort_method_input.currentText()
+        tile_location_abbr = form_data['tile_location']
+        sort_method = form_data['sort_method']
         sort_method = sort_method.upper() if sort_method.lower() == "dapi" else sort_method
 
         if sort_method.lower() == "pooled":
-            facs_population = self.facs_population_input.text()
+            facs_population = form_data['facs_population']
         elif sort_method.lower() == "unsorted":
             facs_population = "no_FACS"
         else:
             facs_population = "DAPI"
 
-        rxn_number = int(self.rxn_number_input.text())
+        rxn_number = int(form_data['rxn_number'])
 
-        if current_date not in self.counter_data["date_info"]:
-            self.counter_data["date_info"][current_date] = {
-                "total_reactions": 0,
-                "batches": []
-            }
+        # Derive per-date chip usage directly from sheet for source-of-truth
+        chips_map, last_chip_on_date, last_used_on_date = self._sheet_date_chip_usage(ws, current_date)
 
-        date_entry = self.counter_data["date_info"][current_date]
-        existing_total = date_entry["total_reactions"]
+        # Starting chip: if we have usage on this date, continue from that chip; else keep previous counter if present, else default 90
+        if last_chip_on_date is not None:
+            start_chip = last_chip_on_date
+            used = last_used_on_date
+        else:
+            # No entries yet for this date → start at last known chip (if present in prior dates), else 90
+            # Try to parse last chip from entire sheet (regardless of date)
+            _, last_chip_any_date, last_used_any_date = self._sheet_date_chip_usage(ws, current_date=None)  # will return none since current_date mismatch
+            # Fallback: default chip 90 with used 0
+            start_chip = 90
+            used = 0
 
-        total_reactions_after = existing_total + rxn_number
-        batches_before = (existing_total + 7) // 8
-        batches_after = (total_reactions_after + 7) // 8
-        new_batches_needed = batches_after - batches_before
+        chip = start_chip
+        assignments = []
+        updates_for_date = {}
 
-        new_p_numbers = [self.counter_data["next_counter"] + i for i in range(new_batches_needed)]
-        self.counter_data["next_counter"] += new_batches_needed
+        # Allocate wells (max 8 per chip), continue same chip when not full
+        for _ in range(rxn_number):
+            if used == 8:
+                updates_for_date[str(chip)] = used
+                chip += 1
+                used = int(chips_map.get(str(chip), 0))
+            used += 1
+            assignments.append((chip, used))
+            updates_for_date[str(chip)] = used
 
-        all_batches = date_entry["batches"].copy()
-        all_batches.extend({"p_number": p, "count": 0} for p in new_p_numbers)
+        # Persist date usage back into chips_map for this run (in-memory, source-of-truth is the sheet we’re writing)
+        chips_map.update(updates_for_date)
 
-        reaction_labels = []
-        for x in range(rxn_number):
-            global_idx = existing_total + x + 1
-            batch_idx = (global_idx - 1) // 8
-            p_number = all_batches[batch_idx]["p_number"]
-            suffix_num = ((global_idx - 1) % 8) + 1
-            reaction_labels.append((p_number, suffix_num))
-
-        date_entry["total_reactions"] = total_reactions_after
-        date_entry["batches"] = all_batches
-
-        atac_indices = [self.convert_index(index) for index in self.atac_indices_input.text().split(",")]
-        atac_indices = [self.pad_index(index) for index in atac_indices]
-
-        rna_indices = [self.convert_index(index) for index in self.rna_indices_input.text().split(",")]
-        rna_indices = [self.pad_index(index) for index in rna_indices]
-
-        seq_portal = "no"
-        elab_link = pyperclip.paste()
-        tissue_name = f"{donor_name}.{tile_location_abbr}.{slab}.{tile}"
-        dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Multiome'
-        cell_prep_type = "nuclei"
-
-        sorting_status = "PS" if sort_method.lower() in ["pooled", "dapi"] else "PN"
-        sorter_initials = self.sorter_initials_input.text().strip().upper()
-        enriched_cell_sample_container_name = f"MPXM_{current_date}_{sorting_status}_{sorter_initials}"
-
-        study = "HMBA_CjAtlas_Subcortex" if self.project_input.currentText() == "HMBA_CjAtlas_Subcortex" else self.project_name_input.text()
+        # Indices
+        atac_indices = [self.convert_index(i) for i in form_data['atac_indices'].split(",")] if form_data.get('atac_indices') else []
+        atac_indices = [self.pad_index(i) for i in atac_indices]
+        rna_indices = [self.convert_index(i) for i in form_data['rna_indices'].split(",")] if form_data.get('rna_indices') else []
+        rna_indices = [self.pad_index(i) for i in rna_indices]
 
         dup_index_counter = {}
-        headers = [cell.value for cell in worksheet[1]]
+        headers = [cell.value for cell in ws[1]]
+        modalities = ["RNA"] if project == "HMBA_Aim4" else ["RNA", "ATAC"]
+
+        if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label:
+            slab_for_tissue = combined_slab_label
+        else:
+            slab_for_tissue = slab
+        tissue_name_base = f"{donor_name}.{tile_location_abbr}.{slab_for_tissue}.{tile}"
 
         for x in range(rxn_number):
-            p_number, suffix_num = reaction_labels[x]
-            barcoded_cell_sample_name = f'P{str(p_number).zfill(5)}_{suffix_num}'
-            port_well = suffix_num
+            p_number, port_well = assignments[x]
+            barcoded_cell_sample_name = f'P{str(p_number).zfill(4)}_{port_well}'
 
-            for modality in ["RNA", "ATAC"]:
+            for modality in modalities:
                 self.write_modality_data(
-                    worksheet, current_row, modality, x,
+                    ws, current_row, modality, x,
                     current_date, mit_name, slab, tile, sort_method,
                     port_well, barcoded_cell_sample_name,
-                    sorting_status, sorter_initials,
-                    tissue_name, dissociated_cell_sample_name,
-                    enriched_cell_sample_container_name,
-                    study, seq_portal, elab_link,
-                    facs_population, cell_prep_type,
-                    rna_indices, atac_indices,
-                    headers, dup_index_counter,
-                    donor_name
+                    form_data,
+                    tissue_name_base=tissue_name_base,
+                    rna_indices=rna_indices, atac_indices=atac_indices,
+                    headers=headers, dup_index_counter=dup_index_counter,
+                    donor_name=donor_name,
+                    project=project,
+                    combined_slab_label=combined_slab_label,
+                    slab_count=slab_count
                 )
                 current_row += 1
 
-        workbook.save(self.workbook_path)
-        with open(self.COUNTER_FILE, 'w') as f:
-            json.dump(self.counter_data, f, indent=4)
+        # Save workbook (GCS generation-safe)
+        for attempt in range(3):
+            try:
+                self._upload_workbook(wb, object_name, if_generation_match=generation if GCS_ENABLED else None)
+                break
+            except Exception as e:
+                if GCS_ENABLED and "precondition" in str(e).lower():
+                    wb, generation = self._download_workbook(object_name)
+                    ws = wb.active
+                else:
+                    raise
 
-    def write_modality_data(self, worksheet, current_row, modality, x, *args):
-        from openpyxl.styles import Font, Alignment
+        return True
 
-        (current_date, mit_name, slab, tile, sort_method,
-         port_well, barcoded_cell_sample_name,
-         sorting_status, sorter_initials,
-         tissue_name, dissociated_cell_sample_name,
-         enriched_cell_sample_container_name,
-         study, seq_portal, elab_link,
-         facs_population, cell_prep_type,
-         rna_indices, atac_indices,
-         headers, dup_index_counter, donor_name) = args
+    def write_modality_data(self, worksheet, current_row, modality, x, current_date, mit_name, slab, tile, sort_method,
+                            port_well, barcoded_cell_sample_name, form_data, tissue_name_base, rna_indices,
+                            atac_indices, headers, dup_index_counter, donor_name,
+                            project=None, combined_slab_label=None, slab_count=1):
 
-        krienen_lab_identifier = f'{current_date}_HMBA_{mit_name}_Slab{int(slab)}_Tile{int(tile) if tile.isdigit() else tile}_{sort_method}_{modality}{x + 1}'
-        enriched_cell_sample_name = f'MPXM_{current_date}_{sorting_status}_{sorter_initials}_{port_well}'
+        # Identifier slab/tile formatting
+        if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label and slab_count > 1:
+            unpadded = []
+            for s in combined_slab_label.split('_'):
+                try:
+                    unpadded.append(str(int(s)))
+                except ValueError:
+                    unpadded.append(s)
+            slab_part = f"Slabs_{'_'.join(unpadded)}"
+        else:
+            slab_part = f"Slab{int(slab)}"
+        tile_part = f"Tile{int(tile)}" if str(tile).isdigit() else tile
 
-        library_prep_date = (self.convert_date(self.rna_prep_date_input.text()) if modality == "RNA"
-                             else self.convert_date(self.atac_prep_date_input.text()))
+        krienen_lab_identifier = (
+            f"{current_date}_HMBA_{mit_name}_{slab_part}_{tile_part}_{sort_method}_{modality}{x + 1}"
+        )
+
+        experimenter_initials = form_data['sorter_initials'].strip().upper()
+        sorting_status = "PS" if sort_method.lower() in ["pooled", "dapi"] else "PN"
+        tissue_name = tissue_name_base
+
+        if project == "HMBA_Aim4":
+            dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Rseq'
+            enriched_prefix = "MPTX"
+            rna_suffix = "TX"
+        else:
+            dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Multiome'
+            enriched_prefix = "MPXM"
+            rna_suffix = "XR"
+        atac_suffix = "XA"
+
+        enriched_cell_sample_container_name = f"{enriched_prefix}_{current_date}_{sorting_status}_{experimenter_initials}"
+        enriched_cell_sample_name = f'{enriched_prefix}_{current_date}_{sorting_status}_{experimenter_initials}_{port_well}'
+
+        study = form_data.get('project', '')
+
+        seq_portal = "no"
+        elab_link = form_data.get('elab_link', '')
+        facs_population = form_data.get('facs_population', 'no_FACS')
+        cell_prep_type = "nuclei"
+
+        library_prep_date = (self.convert_date(form_data['rna_prep_date']) if modality == "RNA"
+                             else self.convert_date(form_data['atac_prep_date']))
 
         if modality == "RNA":
-            library_method = "10xMultiome-RSeq"
-            library_type = "LPLCXR"
+            if project == "HMBA_Aim4":
+                library_method = "10xV4"
+                library_type_suffix = rna_suffix
+            else:
+                library_method = "10xMultiome-RSeq"
+                library_type_suffix = rna_suffix
+            library_type = f"LP{experimenter_initials}{library_type_suffix}"
             library_index = rna_indices[x]
 
-            cdna_concentration = float(self.cdna_concentration_input.text().split(',')[x])
+            cdna_concentration = float(form_data['cdna_concentration'].split(',')[x])
             cdna_amplified_quantity = cdna_concentration * 40
             cdna_library_input = cdna_amplified_quantity * 0.25
-            percent_cdna_400bp = float(self.percent_cdna_400bp_input.text().split(',')[x])
-            rna_concentration = float(self.rna_lib_concentration_input.text().split(',')[x])
+            percent_cdna_400bp = float(form_data['percent_cdna_400bp'].split(',')[x])
+            rna_concentration = float(form_data['rna_lib_concentration'].split(',')[x])
             lib_quant = rna_concentration * 35
 
-            cdna_pcr_cycles = int(self.cdna_pcr_cycles_input.text().split(',')[x])
-            rna_size = int(self.rna_sizes_input.text().split(',')[x])
-            library_cycles = int(self.library_cycles_rna_input.text().split(',')[x])
+            cdna_pcr_cycles = int(form_data['cdna_pcr_cycles'].split(',')[x])
+            rna_size = int(form_data['rna_sizes'].split(',')[x])
+            library_cycles = int(form_data['library_cycles_rna'].split(',')[x])
         else:
             library_method = "10xMultiome-ASeq"
-            library_type = "LPLCXA"
+            library_type = f"LP{experimenter_initials}{atac_suffix}"
             library_index = atac_indices[x]
 
-            atac_concentration = float(self.atac_lib_concentration_input.text().split(',')[x])
+            atac_concentration = float(form_data['atac_lib_concentration'].split(',')[x])
             lib_quant = atac_concentration * 20
 
-            atac_size = int(self.atac_sizes_input.text().split(',')[x])
-            library_cycles = int(self.library_cycles_atac_input.text().split(',')[x])
+            atac_size = int(form_data['atac_sizes'].split(',')[x])
+            library_cycles = int(form_data['library_cycles_atac'].split(',')[x])
+
+            cdna_concentration = None
+            cdna_amplified_quantity = None
+            cdna_library_input = None
+            percent_cdna_400bp = None
+            cdna_pcr_cycles = None
+            rna_size = None
 
         key = (library_type, library_prep_date, library_index)
         dup_index_counter[key] = dup_index_counter.get(key, 0) + 1
         library_prep_set = f"{library_type}_{library_prep_date}_{dup_index_counter[key]}"
         library_name = f"{library_prep_set}_{library_index}"
 
-        expected_cell_capture = int(self.expected_recovery_input.text())
-        concentration = float(self.nuclei_concentration_input.text().replace(",", ""))
-        volume = float(self.nuclei_volume_input.text())
+        expected_cell_capture = int(form_data['expected_recovery'])
+        concentration = float(form_data['nuclei_concentration'].replace(",", ""))
+        volume = float(form_data['nuclei_volume'])
         enriched_cell_sample_quantity_count = round(concentration * volume)
 
         row_data = [
@@ -852,8 +598,9 @@ class DataLogGUI(QMainWindow):
             enriched_cell_sample_quantity_count,
             barcoded_cell_sample_name,
             library_method,
-            "10xMultiome-RSeq" if modality == "RNA" else None,
-            self.convert_date(self.cdna_amp_date_input.text()) if modality == "RNA" else None,
+            ("10xV4" if (modality == "RNA" and project == "HMBA_Aim4")
+             else "10xMultiome-RSeq" if modality == "RNA" else None),
+            self.convert_date(form_data['cdna_amp_date']) if modality == "RNA" else None,
             None,
             cdna_pcr_cycles if modality == "RNA" else None,
             "Pass" if modality == "RNA" else None,
@@ -872,155 +619,115 @@ class DataLogGUI(QMainWindow):
             f"SI-NA-{atac_indices[x]}" if modality == "ATAC" else None
         ]
 
+        # amplified_cdna_name: derive next value by scanning the sheet, not local state
         if modality == "RNA":
-            cdna_amp_date = self.convert_date(self.cdna_amp_date_input.text())
-            amp_date_key = f"amp_{cdna_amp_date}"
-
-            if amp_date_key not in self.counter_data["amp_counter"]:
-                self.counter_data["amp_counter"][amp_date_key] = 0
-
-            reaction_count = self.counter_data["amp_counter"][amp_date_key]
-            letter = chr(65 + (reaction_count % 8))
-            batch_num_for_amp = (reaction_count // 8) + 1
-
-            # keep your existing prefix logic here; suffix is date-only counter
-            row_data[21] = f"APLCXR_{cdna_amp_date}_{batch_num_for_amp}_{letter}"
-            self.counter_data["amp_counter"][amp_date_key] += 1
+            cdna_amp_date = self.convert_date(form_data['cdna_amp_date'])
+            amp_prefix = f"AP{experimenter_initials}{rna_suffix}"
+            row_data[21] = self._next_amp_name(worksheet, amp_prefix, cdna_amp_date)
 
         for col_num, value in enumerate(row_data, start=1):
             cell = worksheet.cell(row=current_row, column=col_num, value=value)
             cell.font = Font(name="Arial", size=10)
             cell.alignment = Alignment(horizontal='left')
-
             if (modality == "ATAC" and value is None) or (
-                    modality == "RNA" and col_num == headers.index('ATAC_index') + 1):
+                modality == "RNA" and col_num == headers.index('ATAC_index') + 1
+            ):
                 cell.fill = self.black_fill
-
         tissue_old_col = headers.index('tissue_name_old') + 1
         worksheet.cell(row=current_row, column=tissue_old_col).fill = self.black_fill
 
-    def on_submit(self):
+
+# favicon route (optional, for direct /favicon.ico requests)
+@app.route('/favicon.ico')
+def favicon():
+    resp = make_response(
+        send_from_directory(
+            os.path.join(app.root_path, 'static'),
+            'favicon.ico',
+            mimetype='image/vnd.microsoft.icon'
+        )
+    )
+    resp.headers['Cache-Control'] = 'public, max-age=31536000'
+    return resp
+
+
+data_logger = DataLogger()
+
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/update_counter', methods=['POST'])
+def update_counter():
+    try:
+        request_data = request.json or {}
+        # Accept user from JSON or query param
+        user_first_name = (request_data.get('user_first_name') or request.args.get('user') or "").strip()
+        if not user_first_name:
+            return jsonify({'success': False, 'error': 'Missing user_first_name'}), 400
+
+        # Accept counter as number or numeric string
+        new_counter_raw = request_data.get('new_counter')
         try:
-            QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
+            new_counter = int(new_counter_raw)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'Invalid counter value'}), 400
+        if new_counter < 0:
+            return jsonify({'success': False, 'error': 'Invalid counter value'}), 400
 
-            if not self.validate_inputs():
-                QApplication.restoreOverrideCursor()
-                return
+        user_key = data_logger._safe_user_key(user_first_name)
 
-            if "next_counter" not in self.counter_data:
-                QApplication.restoreOverrideCursor()
+        # If you’re persisting per-user state to GCS:
+        # state = data_logger._load_user_state(user_key)
+        # state['next_counter'] = new_counter
+        # data_logger._save_user_state(user_key, state)
 
-                chip_count, ok = QInputDialog.getInt(
-                    self,
-                    "Current Chip Count",
-                    "What is the current chip count on the data log (PXXXX)?",
-                    90,
-                    1,
-                    9999
-                )
+        # If you’re still using the local meta fallback:
+        meta = data_logger._load_local_meta()
+        states = meta.setdefault('user_states', {})
+        state = states.setdefault(user_key, {"next_counter": None, "date_info": {}, "amp_counter": {}})
+        state['next_counter'] = new_counter
+        data_logger._save_local_meta(meta)
 
-                if not ok:
-                    return
+        return jsonify({'success': True, 'new_counter': new_counter})
+    except Exception as e:
+        # Surface server-side error to help diagnose
+        return jsonify({'success': False, 'error': str(e)}), 500
 
-                self.counter_data["next_counter"] = chip_count
-                QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
-
-            if not self.file_location:
-                QApplication.restoreOverrideCursor()
-                self.file_location = self.get_save_location()
-                if not self.file_location:
-                    QMessageBox.critical(self, "Error", "No save location specified!")
-                    return
-                QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
-
-            self.workbook_path = self.file_location
-            self.process_form_data()
-
-            from openpyxl import load_workbook
-            from openpyxl.utils import get_column_letter
-            from openpyxl.styles import Alignment
-
-            workbook = load_workbook(self.workbook_path)
-            worksheet = workbook.active
-
-            for column in worksheet.columns:
-                max_length = 0
-                column_letter = get_column_letter(column[0].column)
-                for cell in column:
-                    try:
-                        cell_value = str(cell.value) if cell.value is not None else ""
-                        if len(cell_value) > max_length:
-                            max_length = len(cell_value)
-                        cell.alignment = Alignment(horizontal='left')
-                    except Exception:
-                        pass
-                worksheet.column_dimensions[column_letter].width = (max_length + 2)
-
-            workbook.save(self.workbook_path)
-            QApplication.restoreOverrideCursor()
-
-            QMessageBox.information(
-                self,
-                "Success",
-                f"Data successfully appended to {self.workbook_path}"
-            )
-
-            self.clear_form_fields()
-
-        except Exception as e:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"An error occurred while processing the data:\n{str(e)}"
-            )
-
-    def clear_form_fields(self):
-        self.date_input.clear()
-        self.marmoset_input.setCurrentIndex(0)
-        self.slab_input.clear()
-        self.tile_input.clear()
-        self.hemisphere_input.setCurrentIndex(0)
-
-        self.tile_location_input.setCurrentIndex(0)
-        self.sort_method_input.setCurrentIndex(0)
-        self.rxn_number_input.clear()
-        self.facs_population_input.clear()
-        self.project_input.setCurrentIndex(0)
-        self.project_name_input.clear()
-
-        self.percent_cdna_400bp_input.clear()
-        self.cdna_concentration_input.clear()
-        self.rna_lib_concentration_input.clear()
-        self.atac_lib_concentration_input.clear()
-
-        self.cdna_amp_date_input.clear()
-        self.atac_prep_date_input.clear()
-        self.rna_prep_date_input.clear()
-        self.cdna_pcr_cycles_input.clear()
-        self.expected_recovery_input.clear()
-        self.nuclei_concentration_input.clear()
-        self.nuclei_volume_input.clear()
-
-        self.rna_indices_input.clear()
-        self.atac_indices_input.clear()
-        self.rna_sizes_input.clear()
-        self.atac_sizes_input.clear()
-        self.library_cycles_rna_input.clear()
-        self.library_cycles_atac_input.clear()
-        self.sorter_initials_input.clear()
+@app.route('/submit', methods=['POST'])
+def submit_data():
+    try:
+        form_data = request.json
+        required_fields = ['user_first_name', 'date', 'marmoset', 'slab', 'tile', 'hemisphere', 'tile_location', 'sort_method',
+                           'rxn_number', 'sorter_initials']
+        for field in required_fields:
+            if not form_data.get(field):
+                return jsonify({'success': False, 'error': f'Missing required field: {field}'})
+        success = data_logger.process_form_data(form_data)
+        return jsonify({'success': True, 'message': 'Data saved successfully!'}) if success else jsonify({'success': False, 'error': 'Failed to process data'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 
-def main():
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    gui = DataLogGUI()
-    gui.show()
-    sys.exit(app.exec())
-
-
-if __name__ == '__main__':
-    main()
-
-## to build on mac: python3 -m PyInstaller --onedir --windowed --name "Krienen Data Logger" --icon=icon.icns --add-data "requirements.txt:." --add-data "sample_name_counter.json:." dataloggerGUI.py
-## to build on windows: pyinstaller --onefile --windowed --icon=icon.ico --add-data "requirements.txt;." --add-data "sample_name_counter.json;." dataloggerGUI.py
+@app.route('/download')
+def download_excel():
+    try:
+        user_first_name = (request.args.get('user') or "").strip()
+        if not user_first_name:
+            return jsonify({'error': 'Missing user name in query parameter ?user='}), 400
+        user_key = data_logger._safe_user_key(user_first_name)
+        object_name = data_logger._load_pointer(user_key)
+        if not object_name:
+            object_name = data_logger._new_object_name(user_key)
+            data_logger._save_pointer(user_key, object_name)
+        data = data_logger._download_workbook_bytes(object_name)
+        filename = os.path.basename(object_name)
+        return send_file(
+            io.BytesIO(data),
+            as_attachment=True,
+            download_name=filename,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
