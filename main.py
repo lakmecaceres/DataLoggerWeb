@@ -333,153 +333,148 @@ class DataLogger:
 
     # ----------------- Business logic -----------------
 
-    def process_form_data(self, form_data):
-        # User key
-        user_first_name = (form_data.get('user_first_name') or "").strip()
-        user_key = self._safe_user_key(user_first_name)
+    def process_form_data(self):
+        # Import heavy modules only when needed
+        from openpyxl import load_workbook
+        from openpyxl.utils import get_column_letter
+        import pyperclip
 
-        # Ensure per-user current workbook pointer
-        object_name = self._load_pointer(user_key)
-        if not object_name:
-            object_name = self._new_object_name(user_key)
-            self._save_pointer(user_key, object_name)
+        # Load or create workbook
+        if self.workbook_path and os.path.exists(self.workbook_path):
+            workbook = load_workbook(self.workbook_path)
+        else:
+            workbook = self.initialize_excel()
 
-        # Load workbook
-        wb, generation = self._download_workbook(object_name)
-        ws = wb.active
+        worksheet = workbook.active
 
-        # Find next row
+        # Fix: Properly detect the actual last row with content
         last_row_with_content = 1
-        for row_idx in range(1, ws.max_row + 1):
-            if any(cell.value is not None for cell in ws[row_idx]):
+        for row_idx in range(1, worksheet.max_row + 1):
+            row_has_content = False
+            for cell in worksheet[row_idx]:
+                if cell.value is not None:
+                    row_has_content = True
+                    break
+            if row_has_content:
                 last_row_with_content = row_idx
+
         current_row = last_row_with_content + 1
 
-        # Parse inputs
-        current_date = self.convert_date(form_data['date'])
-        mit_name_input = form_data['marmoset']
+        # Get form values
+        current_date = self.convert_date(self.date_input.text())
+        mit_name_input = self.marmoset_input.currentText()
         mit_name = "cj" + mit_name_input
         donor_name = self.name_to_code[mit_name_input]
-        project = form_data.get('project', '')
 
-        raw_slab = form_data['slab'].strip()
-        hemisphere = form_data['hemisphere'].split()[0].upper()
-
-        if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"}:
-            slab_list = [s.strip().zfill(2) for s in raw_slab.split(',') if s.strip()]
-            if not slab_list:
-                raise ValueError(f"No valid slab numbers provided for {project}")
-            combined_slab_label = "_".join(slab_list)
-            slab_count = len(slab_list)
-            slab = slab_list[0]
+        # Process slab and hemisphere
+        slab = self.slab_input.text().strip()
+        hemisphere = self.hemisphere_input.currentText().split()[0].upper()
+        if hemisphere == "RIGHT":
+            slab = str(int(slab) + 40).zfill(2)
+        elif hemisphere == "BOTH":
+            slab = str(int(slab) + 90).zfill(2)
         else:
-            combined_slab_label = None
-            slab_count = 1
-            slab = raw_slab
-            if hemisphere == "RIGHT":
-                slab = str(int(slab) + 40).zfill(2)
-            elif hemisphere == "BOTH":
-                slab = str(int(slab) + 90).zfill(2)
-            else:
-                slab = slab.zfill(2)
+            slab = slab.zfill(2)
 
-        tile_value = form_data['tile'].strip()
-        tile = str(int(tile_value)).zfill(2) if tile_value.isdigit() else tile_value
+        # Modified to handle alphanumeric tile values
+        tile_value = self.tile_input.text().strip()
+        if tile_value.isdigit():
+            tile = str(int(tile_value)).zfill(2)
+        else:
+            tile = tile_value
 
-        tile_location_abbr = form_data['tile_location']
-        sort_method = form_data['sort_method']
+        # Process tile location
+        tile_location_abbr = self.tile_location_input.currentText()
+
+        # Sort method and FACS population
+        sort_method = self.sort_method_input.currentText()
         sort_method = sort_method.upper() if sort_method.lower() == "dapi" else sort_method
 
         if sort_method.lower() == "pooled":
-            facs_population = form_data['facs_population']
+            facs_population = self.facs_population_input.text()
         elif sort_method.lower() == "unsorted":
             facs_population = "no_FACS"
         else:
             facs_population = "DAPI"
 
-        rxn_number = int(form_data['rxn_number'])
+        # Get reaction number and update counters
+        rxn_number = int(self.rxn_number_input.text())
 
-        # Derive per-date chip usage directly from sheet for source-of-truth
-        chips_map, last_chip_on_date, last_used_on_date = self._sheet_date_chip_usage(ws, current_date)
+        # ==========================================
+        # UPDATED LOGIC FOR COLUMN R (PXXXX counter)
+        # ==========================================
+        if current_date not in self.counter_data["date_info"]:
+            p_number = self.counter_data.get("next_counter", 90)
+            self.counter_data["date_info"][current_date] = {
+                "p_number": p_number,
+                "total_reactions": 0
+            }
+            # Increment the global counter for the *next* new date
+            self.counter_data["next_counter"] = p_number + 1
 
-        # Starting chip: if we have usage on this date, continue from that chip; else keep previous counter if present, else default 90
-        if last_chip_on_date is not None:
-            start_chip = last_chip_on_date
-            used = last_used_on_date
-        else:
-            # No entries yet for this date → start at last known chip (if present in prior dates), else 90
-            # Try to parse last chip from entire sheet (regardless of date)
-            _, last_chip_any_date, last_used_any_date = self._sheet_date_chip_usage(ws, current_date=None)  # will return none since current_date mismatch
-            # Fallback: default chip 90 with used 0
-            start_chip = 90
-            used = 0
+        date_entry = self.counter_data["date_info"][current_date]
+        existing_total = date_entry["total_reactions"]
+        p_number = date_entry["p_number"]
 
-        chip = start_chip
-        assignments = []
-        updates_for_date = {}
+        # Calculate port wells (the _X suffix)
+        port_wells = []
+        for x in range(rxn_number):
+            port_well = existing_total + x + 1
+            port_wells.append((p_number, port_well))
 
-        # Allocate wells (max 8 per chip), continue same chip when not full
-        for _ in range(rxn_number):
-            if used == 8:
-                updates_for_date[str(chip)] = used
-                chip += 1
-                used = int(chips_map.get(str(chip), 0))
-            used += 1
-            assignments.append((chip, used))
-            updates_for_date[str(chip)] = used
+        # Update counters
+        date_entry["total_reactions"] = existing_total + rxn_number
+        # ==========================================
 
-        # Persist date usage back into chips_map for this run (in-memory, source-of-truth is the sheet we’re writing)
-        chips_map.update(updates_for_date)
+        # Process indices
+        atac_indices = [self.convert_index(index) for index in self.atac_indices_input.text().split(",")]
+        atac_indices = [self.pad_index(index) for index in atac_indices]
 
-        # Indices
-        atac_indices = [self.convert_index(i) for i in form_data['atac_indices'].split(",")] if form_data.get('atac_indices') else []
-        atac_indices = [self.pad_index(i) for i in atac_indices]
-        rna_indices = [self.convert_index(i) for i in form_data['rna_indices'].split(",")] if form_data.get('rna_indices') else []
-        rna_indices = [self.pad_index(i) for i in rna_indices]
+        rna_indices = [self.convert_index(index) for index in self.rna_indices_input.text().split(",")]
+        rna_indices = [self.pad_index(index) for index in rna_indices]
 
+        # Initialize common values
+        seq_portal = "no"
+        elab_link = pyperclip.paste()
+        tissue_name = f"{donor_name}.{tile_location_abbr}.{slab}.{tile}"
+        dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Multiome'
+        cell_prep_type = "nuclei"
+
+        sorting_status = "PS" if sort_method.lower() in ["pooled", "dapi"] else "PN"
+        sorter_initials = self.sorter_initials_input.text().strip().upper()
+        enriched_cell_sample_container_name = f"MPXM_{current_date}_{sorting_status}_{sorter_initials}"
+
+        # Get study name
+        study = "HMBA_CjAtlas_Subcortex" if self.project_input.currentText() == "HMBA_CjAtlas_Subcortex" else self.project_name_input.text()
+
+        # Process the data for each reaction and modality
         dup_index_counter = {}
-        headers = [cell.value for cell in ws[1]]
-        modalities = ["RNA"] if project == "HMBA_Aim4" else ["RNA", "ATAC"]
-
-        if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label:
-            slab_for_tissue = combined_slab_label
-        else:
-            slab_for_tissue = slab
-        tissue_name_base = f"{donor_name}.{tile_location_abbr}.{slab_for_tissue}.{tile}"
+        headers = [cell.value for cell in worksheet[1]]
 
         for x in range(rxn_number):
-            p_number, port_well = assignments[x]
+            p_number, port_well = port_wells[x]
             barcoded_cell_sample_name = f'P{str(p_number).zfill(4)}_{port_well}'
 
-            for modality in modalities:
+            for modality in ["RNA", "ATAC"]:
                 self.write_modality_data(
-                    ws, current_row, modality, x,
+                    worksheet, current_row, modality, x,
                     current_date, mit_name, slab, tile, sort_method,
                     port_well, barcoded_cell_sample_name,
-                    form_data,
-                    tissue_name_base=tissue_name_base,
-                    rna_indices=rna_indices, atac_indices=atac_indices,
-                    headers=headers, dup_index_counter=dup_index_counter,
-                    donor_name=donor_name,
-                    project=project,
-                    combined_slab_label=combined_slab_label,
-                    slab_count=slab_count
+                    sorting_status, sorter_initials,
+                    tissue_name, dissociated_cell_sample_name,
+                    enriched_cell_sample_container_name,
+                    study, seq_portal, elab_link,
+                    facs_population, cell_prep_type,
+                    rna_indices, atac_indices,
+                    headers, dup_index_counter,
+                    donor_name
                 )
                 current_row += 1
 
-        # Save workbook (GCS generation-safe)
-        for attempt in range(3):
-            try:
-                self._upload_workbook(wb, object_name, if_generation_match=generation if GCS_ENABLED else None)
-                break
-            except Exception as e:
-                if GCS_ENABLED and "precondition" in str(e).lower():
-                    wb, generation = self._download_workbook(object_name)
-                    ws = wb.active
-                else:
-                    raise
-
-        return True
+        # Save workbook and counter data
+        workbook.save(self.workbook_path)
+        with open(self.COUNTER_FILE, 'w') as f:
+            json.dump(self.counter_data, f, indent=4)
 
     def write_modality_data(self, worksheet, current_row, modality, x, current_date, mit_name, slab, tile, sort_method,
                             port_well, barcoded_cell_sample_name, form_data, tissue_name_base, rna_indices,
@@ -620,19 +615,43 @@ class DataLogger:
         ]
 
         # amplified_cdna_name: derive next value by scanning the sheet, not local state
-        if modality == "RNA":
-            cdna_amp_date = self.convert_date(form_data['cdna_amp_date'])
-            amp_prefix = f"AP{experimenter_initials}{rna_suffix}"
-            row_data[21] = self._next_amp_name(worksheet, amp_prefix, cdna_amp_date)
+        # ... [Keep the top of write_modality_data the same] ...
 
+        # Handle amplified_cdna_name for RNA with fixed logic for batch counting
+        if modality == "RNA":
+            cdna_amp_date = self.convert_date(self.cdna_amp_date_input.text())
+            if not cdna_amp_date:
+                cdna_amp_date = current_date  # Fallback if empty
+
+            # Create a unique key strictly tied to the date
+            amp_date_key = f"amp_{cdna_amp_date}"
+
+            # Initialize counter for new dates
+            if amp_date_key not in self.counter_data["amp_counter"]:
+                self.counter_data["amp_counter"][amp_date_key] = 0
+
+            # Get current counter for this date
+            reaction_count = self.counter_data["amp_counter"][amp_date_key]
+
+            # Math for A-H and batch incrementing
+            letter = chr(65 + (reaction_count % 8))  # A through H
+            batch_num_for_amp = (reaction_count // 8) + 1  # 1, then 2, then 3...
+
+            row_data[21] = f"APLCXR_{cdna_amp_date}_{batch_num_for_amp}_{letter}"
+
+            # Increment the counter for the next sample on this date
+            self.counter_data["amp_counter"][amp_date_key] += 1
+
+        # Write to Excel
         for col_num, value in enumerate(row_data, start=1):
             cell = worksheet.cell(row=current_row, column=col_num, value=value)
             cell.font = Font(name="Arial", size=10)
             cell.alignment = Alignment(horizontal='left')
+
             if (modality == "ATAC" and value is None) or (
-                modality == "RNA" and col_num == headers.index('ATAC_index') + 1
-            ):
+                    modality == "RNA" and col_num == headers.index('ATAC_index') + 1):
                 cell.fill = self.black_fill
+
         tissue_old_col = headers.index('tissue_name_old') + 1
         worksheet.cell(row=current_row, column=tissue_old_col).fill = self.black_fill
 
