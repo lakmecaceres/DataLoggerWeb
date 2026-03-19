@@ -421,6 +421,17 @@ class DataLogger:
             state["next_counter"] = p_number + 1
 
         date_entry = state["date_info"][current_date]
+
+        # OVERRIDE CHECK: Did the user manually update the counter from the UI?
+        expected_next = date_entry["p_number"] + 1
+        current_global_counter = state.get("next_counter", 90)
+
+        # If they don't match, it means you manually clicked the button to change it
+        if current_global_counter != expected_next:
+            date_entry["p_number"] = current_global_counter
+            # Increment the global counter so the next new date knows what to do
+            state["next_counter"] = current_global_counter + 1
+
         existing_total = date_entry["total_reactions"]
         p_number = date_entry["p_number"]
 
