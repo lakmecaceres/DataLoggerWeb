@@ -333,121 +333,124 @@ class DataLogger:
 
     # ----------------- Business logic -----------------
 
-    def process_form_data(self):
+    # ----------------- Business logic -----------------
+
+    def process_form_data(self, form_data):
         # Import heavy modules only when needed
-        from openpyxl import load_workbook
         from openpyxl.utils import get_column_letter
-        import pyperclip
 
-        # Load or create workbook
-        if self.workbook_path and os.path.exists(self.workbook_path):
-            workbook = load_workbook(self.workbook_path)
-        else:
-            workbook = self.initialize_excel()
+        # 1. Setup user workbook and state
+        user_first_name = form_data.get('user_first_name', '').strip()
+        user_key = self._safe_user_key(user_first_name)
 
+        object_name = self._load_pointer(user_key)
+        if not object_name:
+            object_name = self._new_object_name(user_key)
+            self._save_pointer(user_key, object_name)
+
+        workbook, generation = self._download_workbook(object_name)
         worksheet = workbook.active
 
-        # Fix: Properly detect the actual last row with content
+        # Determine actual last row
         last_row_with_content = 1
         for row_idx in range(1, worksheet.max_row + 1):
-            row_has_content = False
             for cell in worksheet[row_idx]:
                 if cell.value is not None:
-                    row_has_content = True
+                    last_row_with_content = row_idx
                     break
-            if row_has_content:
-                last_row_with_content = row_idx
-
         current_row = last_row_with_content + 1
 
-        # Get form values
-        current_date = self.convert_date(self.date_input.text())
-        mit_name_input = self.marmoset_input.currentText()
+        # Load web app user state
+        meta = self._load_local_meta()
+        states = meta.setdefault('user_states', {})
+        state = states.setdefault(user_key, {"next_counter": 90, "date_info": {}, "amp_counter": {}})
+        if "date_info" not in state: state["date_info"] = {}
+        if "amp_counter" not in state: state["amp_counter"] = {}
+        if "next_counter" not in state or state["next_counter"] is None: state["next_counter"] = 90
+
+        # Get values from form_data dictionary
+        current_date = self.convert_date(form_data.get('date', ''))
+        mit_name_input = form_data.get('marmoset', '')
         mit_name = "cj" + mit_name_input
-        donor_name = self.name_to_code[mit_name_input]
+        donor_name = self.name_to_code.get(mit_name_input, mit_name_input)
 
-        # Process slab and hemisphere
-        slab = self.slab_input.text().strip()
-        hemisphere = self.hemisphere_input.currentText().split()[0].upper()
+        slab = form_data.get('slab', '').strip()
+        hemisphere = form_data.get('hemisphere', '').split()[0].upper() if form_data.get('hemisphere') else ''
         if hemisphere == "RIGHT":
-            slab = str(int(slab) + 40).zfill(2)
+            try:
+                slab = str(int(slab) + 40).zfill(2)
+            except:
+                pass
         elif hemisphere == "BOTH":
-            slab = str(int(slab) + 90).zfill(2)
+            try:
+                slab = str(int(slab) + 90).zfill(2)
+            except:
+                pass
         else:
-            slab = slab.zfill(2)
+            if slab.isdigit(): slab = slab.zfill(2)
 
-        # Modified to handle alphanumeric tile values
-        tile_value = self.tile_input.text().strip()
-        if tile_value.isdigit():
-            tile = str(int(tile_value)).zfill(2)
-        else:
-            tile = tile_value
+        tile_value = form_data.get('tile', '').strip()
+        tile = str(int(tile_value)).zfill(2) if tile_value.isdigit() else tile_value
 
-        # Process tile location
-        tile_location_abbr = self.tile_location_input.currentText()
+        tile_location_abbr = form_data.get('tile_location', '')
 
-        # Sort method and FACS population
-        sort_method = self.sort_method_input.currentText()
+        sort_method = form_data.get('sort_method', '')
         sort_method = sort_method.upper() if sort_method.lower() == "dapi" else sort_method
 
         if sort_method.lower() == "pooled":
-            facs_population = self.facs_population_input.text()
+            facs_population = form_data.get('facs_population', '')
         elif sort_method.lower() == "unsorted":
             facs_population = "no_FACS"
         else:
             facs_population = "DAPI"
 
-        # Get reaction number and update counters
-        rxn_number = int(self.rxn_number_input.text())
+        try:
+            rxn_number = int(form_data.get('rxn_number', 1))
+        except ValueError:
+            rxn_number = 1
 
         # ==========================================
         # UPDATED LOGIC FOR COLUMN R (PXXXX counter)
         # ==========================================
-        if current_date not in self.counter_data["date_info"]:
-            p_number = self.counter_data.get("next_counter", 90)
-            self.counter_data["date_info"][current_date] = {
+        if current_date not in state["date_info"]:
+            p_number = state.get("next_counter", 90)
+            state["date_info"][current_date] = {
                 "p_number": p_number,
                 "total_reactions": 0
             }
-            # Increment the global counter for the *next* new date
-            self.counter_data["next_counter"] = p_number + 1
+            state["next_counter"] = p_number + 1
 
-        date_entry = self.counter_data["date_info"][current_date]
+        date_entry = state["date_info"][current_date]
         existing_total = date_entry["total_reactions"]
         p_number = date_entry["p_number"]
 
-        # Calculate port wells (the _X suffix)
         port_wells = []
         for x in range(rxn_number):
             port_well = existing_total + x + 1
             port_wells.append((p_number, port_well))
 
-        # Update counters
         date_entry["total_reactions"] = existing_total + rxn_number
         # ==========================================
 
-        # Process indices
-        atac_indices = [self.convert_index(index) for index in self.atac_indices_input.text().split(",")]
-        atac_indices = [self.pad_index(index) for index in atac_indices]
+        atac_indices_raw = form_data.get('atac_indices', '')
+        atac_indices = [self.pad_index(self.convert_index(i)) if self.convert_index(i) else i for i in
+                        atac_indices_raw.split(',')] if atac_indices_raw else []
 
-        rna_indices = [self.convert_index(index) for index in self.rna_indices_input.text().split(",")]
-        rna_indices = [self.pad_index(index) for index in rna_indices]
+        rna_indices_raw = form_data.get('rna_indices', '')
+        rna_indices = [self.pad_index(self.convert_index(i)) if self.convert_index(i) else i for i in
+                       rna_indices_raw.split(',')] if rna_indices_raw else []
 
-        # Initialize common values
         seq_portal = "no"
-        elab_link = pyperclip.paste()
+        elab_link = form_data.get('elab_link', '')
         tissue_name = f"{donor_name}.{tile_location_abbr}.{slab}.{tile}"
         dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Multiome'
         cell_prep_type = "nuclei"
 
         sorting_status = "PS" if sort_method.lower() in ["pooled", "dapi"] else "PN"
-        sorter_initials = self.sorter_initials_input.text().strip().upper()
+        sorter_initials = form_data.get('sorter_initials', '').strip().upper()
         enriched_cell_sample_container_name = f"MPXM_{current_date}_{sorting_status}_{sorter_initials}"
+        study = form_data.get('project', 'HMBA_CjAtlas_Subcortex')
 
-        # Get study name
-        study = "HMBA_CjAtlas_Subcortex" if self.project_input.currentText() == "HMBA_CjAtlas_Subcortex" else self.project_name_input.text()
-
-        # Process the data for each reaction and modality
         dup_index_counter = {}
         headers = [cell.value for cell in worksheet[1]]
 
@@ -457,104 +460,84 @@ class DataLogger:
 
             for modality in ["RNA", "ATAC"]:
                 self.write_modality_data(
-                    worksheet, current_row, modality, x,
-                    current_date, mit_name, slab, tile, sort_method,
-                    port_well, barcoded_cell_sample_name,
-                    sorting_status, sorter_initials,
-                    tissue_name, dissociated_cell_sample_name,
-                    enriched_cell_sample_container_name,
-                    study, seq_portal, elab_link,
-                    facs_population, cell_prep_type,
-                    rna_indices, atac_indices,
-                    headers, dup_index_counter,
-                    donor_name
+                    worksheet, current_row, modality, x, current_date, mit_name, slab, tile, sort_method,
+                    port_well, barcoded_cell_sample_name, form_data, tissue_name, rna_indices,
+                    atac_indices, headers, dup_index_counter, donor_name, study, state
                 )
                 current_row += 1
 
-        # Save workbook and counter data
-        workbook.save(self.workbook_path)
-        with open(self.COUNTER_FILE, 'w') as f:
-            json.dump(self.counter_data, f, indent=4)
+        self._upload_workbook(workbook, object_name, generation if GCS_ENABLED else None)
+        self._save_local_meta(meta)
+        return True
 
     def write_modality_data(self, worksheet, current_row, modality, x, current_date, mit_name, slab, tile, sort_method,
                             port_well, barcoded_cell_sample_name, form_data, tissue_name_base, rna_indices,
-                            atac_indices, headers, dup_index_counter, donor_name,
-                            project=None, combined_slab_label=None, slab_count=1):
+                            atac_indices, headers, dup_index_counter, donor_name, project, state):
 
-        # Identifier slab/tile formatting
-        if project in {"HMBA_CjAtlas_Cortex", "HMBA_Aim4"} and combined_slab_label and slab_count > 1:
-            unpadded = []
-            for s in combined_slab_label.split('_'):
-                try:
-                    unpadded.append(str(int(s)))
-                except ValueError:
-                    unpadded.append(s)
-            slab_part = f"Slabs_{'_'.join(unpadded)}"
-        else:
-            slab_part = f"Slab{int(slab)}"
+        slab_part = f"Slab{int(slab)}" if str(slab).isdigit() else f"Slab{slab}"
         tile_part = f"Tile{int(tile)}" if str(tile).isdigit() else tile
 
-        krienen_lab_identifier = (
-            f"{current_date}_HMBA_{mit_name}_{slab_part}_{tile_part}_{sort_method}_{modality}{x + 1}"
-        )
+        krienen_lab_identifier = f"{current_date}_HMBA_{mit_name}_{slab_part}_{tile_part}_{sort_method}_{modality}{x + 1}"
 
-        experimenter_initials = form_data['sorter_initials'].strip().upper()
+        experimenter_initials = form_data.get('sorter_initials', '').strip().upper()
         sorting_status = "PS" if sort_method.lower() in ["pooled", "dapi"] else "PN"
         tissue_name = tissue_name_base
 
-        if project == "HMBA_Aim4":
-            dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Rseq'
-            enriched_prefix = "MPTX"
-            rna_suffix = "TX"
-        else:
-            dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Multiome'
-            enriched_prefix = "MPXM"
-            rna_suffix = "XR"
+        dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Multiome'
+        enriched_prefix = "MPXM"
+        rna_suffix = "XR"
         atac_suffix = "XA"
 
         enriched_cell_sample_container_name = f"{enriched_prefix}_{current_date}_{sorting_status}_{experimenter_initials}"
         enriched_cell_sample_name = f'{enriched_prefix}_{current_date}_{sorting_status}_{experimenter_initials}_{port_well}'
 
-        study = form_data.get('project', '')
-
+        study = project
         seq_portal = "no"
         elab_link = form_data.get('elab_link', '')
         facs_population = form_data.get('facs_population', 'no_FACS')
         cell_prep_type = "nuclei"
 
-        library_prep_date = (self.convert_date(form_data['rna_prep_date']) if modality == "RNA"
-                             else self.convert_date(form_data['atac_prep_date']))
+        library_prep_date = (self.convert_date(form_data.get('rna_prep_date', '')) if modality == "RNA"
+                             else self.convert_date(form_data.get('atac_prep_date', '')))
+
+        # Helper methods to safely extract comma separated inputs from the Web UI
+        def safe_float_split(val, idx):
+            try:
+                return float(str(val).split(',')[idx].strip())
+            except:
+                return 0.0
+
+        def safe_int_split(val, idx):
+            try:
+                return int(str(val).split(',')[idx].strip())
+            except:
+                return 0
 
         if modality == "RNA":
-            if project == "HMBA_Aim4":
-                library_method = "10xV4"
-                library_type_suffix = rna_suffix
-            else:
-                library_method = "10xMultiome-RSeq"
-                library_type_suffix = rna_suffix
-            library_type = f"LP{experimenter_initials}{library_type_suffix}"
-            library_index = rna_indices[x]
+            library_method = "10xMultiome-RSeq"
+            library_type = f"LP{experimenter_initials}{rna_suffix}"
+            library_index = rna_indices[x] if x < len(rna_indices) else ""
 
-            cdna_concentration = float(form_data['cdna_concentration'].split(',')[x])
+            cdna_concentration = safe_float_split(form_data.get('cdna_concentration', ''), x)
             cdna_amplified_quantity = cdna_concentration * 40
             cdna_library_input = cdna_amplified_quantity * 0.25
-            percent_cdna_400bp = float(form_data['percent_cdna_400bp'].split(',')[x])
-            rna_concentration = float(form_data['rna_lib_concentration'].split(',')[x])
+            percent_cdna_400bp = safe_float_split(form_data.get('percent_cdna_400bp', ''), x)
+            rna_concentration = safe_float_split(form_data.get('rna_lib_concentration', ''), x)
             lib_quant = rna_concentration * 35
 
-            cdna_pcr_cycles = int(form_data['cdna_pcr_cycles'].split(',')[x])
-            rna_size = int(form_data['rna_sizes'].split(',')[x])
-            library_cycles = int(form_data['library_cycles_rna'].split(',')[x])
+            cdna_pcr_cycles = safe_int_split(form_data.get('cdna_pcr_cycles', ''), x)
+            rna_size = safe_int_split(form_data.get('rna_sizes', ''), x)
+            library_cycles = safe_int_split(form_data.get('library_cycles_rna', ''), x)
         else:
             library_method = "10xMultiome-ASeq"
             library_type = f"LP{experimenter_initials}{atac_suffix}"
-            library_index = atac_indices[x]
+            library_index = atac_indices[x] if x < len(atac_indices) else ""
 
-            atac_concentration = float(form_data['atac_lib_concentration'].split(',')[x])
+            atac_concentration = safe_float_split(form_data.get('atac_lib_concentration', ''), x)
             lib_quant = atac_concentration * 20
 
-            atac_size = int(form_data['atac_sizes'].split(',')[x])
-            library_cycles = int(form_data['library_cycles_atac'].split(',')[x])
+            atac_size = safe_int_split(form_data.get('atac_sizes', ''), x)
+            library_cycles = safe_int_split(form_data.get('library_cycles_atac', ''), x)
 
             cdna_concentration = None
             cdna_amplified_quantity = None
@@ -568,10 +551,17 @@ class DataLogger:
         library_prep_set = f"{library_type}_{library_prep_date}_{dup_index_counter[key]}"
         library_name = f"{library_prep_set}_{library_index}"
 
-        expected_cell_capture = int(form_data['expected_recovery'])
-        concentration = float(form_data['nuclei_concentration'].replace(",", ""))
-        volume = float(form_data['nuclei_volume'])
-        enriched_cell_sample_quantity_count = round(concentration * volume)
+        try:
+            expected_cell_capture = int(form_data.get('expected_recovery', 0))
+        except ValueError:
+            expected_cell_capture = 0
+
+        try:
+            concentration = float(form_data.get('nuclei_concentration', '0').replace(",", ""))
+            volume = float(form_data.get('nuclei_volume', '0'))
+            enriched_cell_sample_quantity_count = round(concentration * volume)
+        except ValueError:
+            enriched_cell_sample_quantity_count = 0
 
         row_data = [
             krienen_lab_identifier,
@@ -593,9 +583,8 @@ class DataLogger:
             enriched_cell_sample_quantity_count,
             barcoded_cell_sample_name,
             library_method,
-            ("10xV4" if (modality == "RNA" and project == "HMBA_Aim4")
-             else "10xMultiome-RSeq" if modality == "RNA" else None),
-            self.convert_date(form_data['cdna_amp_date']) if modality == "RNA" else None,
+            "10xMultiome-RSeq" if modality == "RNA" else None,
+            self.convert_date(form_data.get('cdna_amp_date', '')) if modality == "RNA" else None,
             None,
             cdna_pcr_cycles if modality == "RNA" else None,
             "Pass" if modality == "RNA" else None,
@@ -609,40 +598,34 @@ class DataLogger:
             library_cycles,
             lib_quant,
             "Pass",
-            f"SI-TT-{rna_indices[x]}_i7" if modality == "RNA" else None,
-            f"SI-TT-{rna_indices[x]}_b(i5)" if modality == "RNA" else None,
-            f"SI-NA-{atac_indices[x]}" if modality == "ATAC" else None
+            f"SI-TT-{library_index}_i7" if modality == "RNA" else None,
+            f"SI-TT-{library_index}_b(i5)" if modality == "RNA" else None,
+            f"SI-NA-{library_index}" if modality == "ATAC" else None
         ]
 
-        # amplified_cdna_name: derive next value by scanning the sheet, not local state
-        # ... [Keep the top of write_modality_data the same] ...
-
-        # Handle amplified_cdna_name for RNA with fixed logic for batch counting
+        # ==========================================
+        # UPDATED LOGIC FOR COLUMN V (cDNA counter)
+        # ==========================================
         if modality == "RNA":
-            cdna_amp_date = self.convert_date(self.cdna_amp_date_input.text())
+            cdna_amp_date = self.convert_date(form_data.get('cdna_amp_date', ''))
             if not cdna_amp_date:
                 cdna_amp_date = current_date  # Fallback if empty
 
-            # Create a unique key strictly tied to the date
             amp_date_key = f"amp_{cdna_amp_date}"
 
-            # Initialize counter for new dates
-            if amp_date_key not in self.counter_data["amp_counter"]:
-                self.counter_data["amp_counter"][amp_date_key] = 0
+            if amp_date_key not in state["amp_counter"]:
+                state["amp_counter"][amp_date_key] = 0
 
-            # Get current counter for this date
-            reaction_count = self.counter_data["amp_counter"][amp_date_key]
+            reaction_count = state["amp_counter"][amp_date_key]
 
-            # Math for A-H and batch incrementing
             letter = chr(65 + (reaction_count % 8))  # A through H
             batch_num_for_amp = (reaction_count // 8) + 1  # 1, then 2, then 3...
 
             row_data[21] = f"APLCXR_{cdna_amp_date}_{batch_num_for_amp}_{letter}"
 
-            # Increment the counter for the next sample on this date
-            self.counter_data["amp_counter"][amp_date_key] += 1
+            state["amp_counter"][amp_date_key] += 1
+        # ==========================================
 
-        # Write to Excel
         for col_num, value in enumerate(row_data, start=1):
             cell = worksheet.cell(row=current_row, column=col_num, value=value)
             cell.font = Font(name="Arial", size=10)
@@ -654,7 +637,6 @@ class DataLogger:
 
         tissue_old_col = headers.index('tissue_name_old') + 1
         worksheet.cell(row=current_row, column=tissue_old_col).fill = self.black_fill
-
 
 # favicon route (optional, for direct /favicon.ico requests)
 @app.route('/favicon.ico')
