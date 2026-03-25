@@ -391,20 +391,31 @@ class DataLogger:
         mit_name = "cj" + mit_name_input
         donor_name = self.name_to_code.get(mit_name_input, mit_name_input)
 
-        slab = form_data.get('slab', '').strip()
+        slab_raw = form_data.get('slab', '').strip()
         hemisphere = form_data.get('hemisphere', '').split()[0].upper() if form_data.get('hemisphere') else ''
-        if hemisphere == "RIGHT":
-            try:
-                slab = str(int(slab) + 40).zfill(2)
-            except:
-                pass
-        elif hemisphere == "BOTH":
-            try:
-                slab = str(int(slab) + 90).zfill(2)
-            except:
-                pass
-        else:
-            if slab.isdigit(): slab = slab.zfill(2)
+
+        # Split comma-separated slabs and process each one
+        slab_parts = [s.strip() for s in slab_raw.split(',') if s.strip()]
+        processed_slabs = []
+        for s in slab_parts:
+            if hemisphere == "RIGHT":
+                try:
+                    s = str(int(s) + 40).zfill(2)
+                except:
+                    pass
+            elif hemisphere == "BOTH":
+                try:
+                    s = str(int(s) + 90).zfill(2)
+                except:
+                    pass
+            else:
+                if s.isdigit(): s = s.zfill(2)
+            processed_slabs.append(s)
+
+        # For tissue_name: join multiple slabs with underscores (e.g. 07_08_09_10)
+        slab_for_tissue = "_".join(processed_slabs)
+        # For krienen_lab_identifier: keep using the first slab only
+        slab = processed_slabs[0] if processed_slabs else slab_raw
 
         tile_value = form_data.get('tile', '').strip()
         tile = str(int(tile_value)).zfill(2) if tile_value.isdigit() else tile_value
@@ -513,7 +524,7 @@ class DataLogger:
 
         seq_portal = "no"
         elab_link = form_data.get('elab_link', '')
-        tissue_name = f"{donor_name}.{tile_location_abbr}.{slab}.{tile}"
+        tissue_name = f"{donor_name}.{tile_location_abbr}.{slab_for_tissue}.{tile}"
         dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Multiome'
         cell_prep_type = "nuclei"
 
@@ -531,7 +542,7 @@ class DataLogger:
 
             for modality in ["RNA", "ATAC"]:
                 self.write_modality_data(
-                    worksheet, current_row, modality, x, current_date, mit_name, slab, tile, sort_method,
+                    worksheet, current_row, modality, x, current_date, mit_name, slab_for_tissue, tile, sort_method,
                     port_well, barcoded_cell_sample_name, form_data, tissue_name, rna_indices,
                     atac_indices, headers, dup_index_counter, donor_name, study, state
                 )
@@ -545,7 +556,8 @@ class DataLogger:
                             port_well, barcoded_cell_sample_name, form_data, tissue_name_base, rna_indices,
                             atac_indices, headers, dup_index_counter, donor_name, project, state):
 
-        slab_part = f"Slab{int(slab)}" if str(slab).isdigit() else f"Slab{slab}"
+        # slab may be underscore-joined for multi-slab (e.g. "07_08_09_10")
+        slab_part = f"Slab{slab}"
         tile_part = f"Tile{int(tile)}" if str(tile).isdigit() else tile
 
         krienen_lab_identifier = f"{current_date}_HMBA_{mit_name}_{slab_part}_{tile_part}_{sort_method}_{modality}{x + 1}"
