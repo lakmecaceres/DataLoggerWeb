@@ -524,14 +524,21 @@ class DataLogger:
 
         seq_portal = "no"
         elab_link = form_data.get('elab_link', '')
+        study = form_data.get('project', 'HMBA_CjAtlas_Subcortex')
+        is_aim4 = (study == 'HMBA_Aim4')
+
         tissue_name = f"{donor_name}.{tile_location_abbr}.{slab_for_tissue}.{tile}"
-        dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Multiome'
+        sample_suffix = "Rseq" if is_aim4 else "Multiome"
+        dissociated_cell_sample_name = f'{current_date}_{tissue_name}.{sample_suffix}'
         cell_prep_type = "nuclei"
 
         sorting_status = "PS" if sort_method.lower() in ["pooled", "dapi"] else "PN"
         sorter_initials = form_data.get('sorter_initials', '').strip().upper()
-        enriched_cell_sample_container_name = f"MPXM_{current_date}_{sorting_status}_{sorter_initials}"
-        study = form_data.get('project', 'HMBA_CjAtlas_Subcortex')
+        enriched_prefix = "MPTX" if is_aim4 else "MPXM"
+        enriched_cell_sample_container_name = f"{enriched_prefix}_{current_date}_{sorting_status}_{sorter_initials}"
+
+        # Aim4 = RNA only; Multiome = RNA + ATAC
+        modalities = ["RNA"] if is_aim4 else ["RNA", "ATAC"]
 
         dup_index_counter = {}
         headers = [cell.value for cell in worksheet[1]]
@@ -540,7 +547,7 @@ class DataLogger:
             p_number, port_well = port_wells[x]
             barcoded_cell_sample_name = f'P{str(p_number).zfill(4)}_{port_well}'
 
-            for modality in ["RNA", "ATAC"]:
+            for modality in modalities:
                 self.write_modality_data(
                     worksheet, current_row, modality, x, current_date, mit_name, slab_for_tissue, tile, sort_method,
                     port_well, barcoded_cell_sample_name, form_data, tissue_name, rna_indices,
@@ -566,9 +573,11 @@ class DataLogger:
         sorting_status = "PS" if sort_method.lower() in ["pooled", "dapi"] else "PN"
         tissue_name = tissue_name_base
 
-        dissociated_cell_sample_name = f'{current_date}_{tissue_name}.Multiome'
-        enriched_prefix = "MPXM"
-        rna_suffix = "XR"
+        is_aim4 = (project == 'HMBA_Aim4')
+        sample_suffix = "Rseq" if is_aim4 else "Multiome"
+        dissociated_cell_sample_name = f'{current_date}_{tissue_name}.{sample_suffix}'
+        enriched_prefix = "MPTX" if is_aim4 else "MPXM"
+        rna_suffix = "TX" if is_aim4 else "XR"
         atac_suffix = "XA"
 
         enriched_cell_sample_container_name = f"{enriched_prefix}_{current_date}_{sorting_status}_{experimenter_initials}"
@@ -597,7 +606,7 @@ class DataLogger:
                 return 0
 
         if modality == "RNA":
-            library_method = "10xMultiome-RSeq"
+            library_method = "10xV4" if is_aim4 else "10xMultiome-RSeq"
             library_type = f"LP{experimenter_initials}{rna_suffix}"
             library_index = rna_indices[x] if x < len(rna_indices) else ""
 
@@ -612,7 +621,7 @@ class DataLogger:
             rna_size = safe_int_split(form_data.get('rna_sizes', ''), x)
             library_cycles = safe_int_split(form_data.get('library_cycles_rna', ''), x)
         else:
-            library_method = "10xMultiome-ASeq"
+            library_method = "10xMultiome-ASeq"  # ATAC only for Multiome, not Aim4
             library_type = f"LP{experimenter_initials}{atac_suffix}"
             library_index = atac_indices[x] if x < len(atac_indices) else ""
 
@@ -666,7 +675,7 @@ class DataLogger:
             enriched_cell_sample_quantity_count,
             barcoded_cell_sample_name,
             library_method,
-            "10xMultiome-RSeq" if modality == "RNA" else None,
+            ("10xV4" if is_aim4 else "10xMultiome-RSeq") if modality == "RNA" else None,
             self.convert_date(form_data.get('cdna_amp_date', '')) if modality == "RNA" else None,
             None,
             cdna_pcr_cycles if modality == "RNA" else None,
@@ -697,7 +706,7 @@ class DataLogger:
                 cdna_amp_date = current_date  # Fallback if empty
 
             amp_date_key = f"amp_{cdna_amp_date}"
-            amp_prefix = "APLCXR"
+            amp_prefix = f"AP{experimenter_initials}{rna_suffix}"
 
             # --- Reconcile amp_counter with sheet data ---
             if amp_date_key not in state["amp_counter"]:
