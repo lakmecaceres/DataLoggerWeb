@@ -253,6 +253,23 @@ class DataLogger:
 
     # ----------------- Sheet-derived state helpers -----------------
 
+    def _sheet_max_chip(self, ws):
+        """
+        Scan the entire sheet to find the highest chip number (P####) across
+        ALL dates.  Returns 0 if no barcoded_cell_sample_name rows exist.
+        """
+        headers = [cell.value for cell in ws[1]]
+        bcsn_col = headers.index('barcoded_cell_sample_name') + 1
+        max_chip = 0
+        for row_idx in range(2, ws.max_row + 1):
+            name_val = ws.cell(row=row_idx, column=bcsn_col).value
+            if not name_val or not isinstance(name_val, str):
+                continue
+            m = re.match(r'^P(\d{4})_(\d+)$', name_val)
+            if m:
+                max_chip = max(max_chip, int(m.group(1)))
+        return max_chip
+
     def _sheet_date_chip_usage(self, ws, current_date):
         """
         Scan the sheet for rows with experiment_start_date == current_date
@@ -274,7 +291,7 @@ class DataLogger:
             name_val = ws.cell(row=row_idx, column=bcsn_col).value
             if not name_val or not isinstance(name_val, str):
                 continue
-            m = re.match(r'^P(\d{4})_(\d)$', name_val)
+            m = re.match(r'^P(\d{4})_(\d+)$', name_val)
             if not m:
                 continue
             chip = int(m.group(1))
@@ -411,14 +428,51 @@ class DataLogger:
 
         # ==========================================
         # UPDATED LOGIC FOR COLUMN R (PXXXX counter)
+        # Uses sheet-scanning as source of truth so
+        # counters survive server restarts / state loss.
         # ==========================================
+
+        # --- Reconcile global next_counter with sheet if state looks default ---
+        if state.get("next_counter", 90) == 90 and not state.get("date_info"):
+            global_max_chip = self._sheet_max_chip(worksheet)
+            if global_max_chip >= 90:
+                state["next_counter"] = global_max_chip + 1
+
+        # --- Reconcile state with what's actually in the sheet ---
+        chips_map, sheet_last_chip, sheet_last_used = self._sheet_date_chip_usage(worksheet, current_date)
+
+        # Compute total reactions from sheet: sum of max wells across all chips for this date
+        sheet_total_reactions = sum(int(v) for v in chips_map.values()) if chips_map else 0
+        # The base chip is the lowest chip number used on this date
+        sheet_base_chip = min(int(c) for c in chips_map.keys()) if chips_map else None
+
         if current_date not in state["date_info"]:
-            p_number = state.get("next_counter", 90)
-            state["date_info"][current_date] = {
-                "p_number": p_number,
-                "total_reactions": 0
-            }
-            state["next_counter"] = p_number + 1
+            if sheet_base_chip is not None:
+                # Sheet already has data for this date that state doesn't know about.
+                state["date_info"][current_date] = {
+                    "p_number": sheet_base_chip,  # base chip for this date
+                    "total_reactions": sheet_total_reactions
+                }
+                # Ensure global counter stays ahead of any chip number in the sheet
+                state["next_counter"] = max(state.get("next_counter", 90), sheet_last_chip + 1)
+            else:
+                # Truly new date — no data in sheet or state
+                p_number = state.get("next_counter", 90)
+                state["date_info"][current_date] = {
+                    "p_number": p_number,  # base chip for this date
+                    "total_reactions": 0
+                }
+                state["next_counter"] = p_number + 1
+        else:
+            # State exists for this date — validate against sheet in case of drift
+            date_entry = state["date_info"][current_date]
+            if sheet_base_chip is not None:
+                if sheet_total_reactions > date_entry["total_reactions"]:
+                    date_entry["total_reactions"] = sheet_total_reactions
+                # Keep base chip aligned with sheet
+                if sheet_base_chip != date_entry.get("p_number"):
+                    date_entry["p_number"] = sheet_base_chip
+                state["next_counter"] = max(state.get("next_counter", 90), sheet_last_chip + 1)
 
         date_entry = state["date_info"][current_date]
 
@@ -433,14 +487,20 @@ class DataLogger:
             state["next_counter"] = current_global_counter + 1
 
         existing_total = date_entry["total_reactions"]
-        p_number = date_entry["p_number"]
+        base_p_number = date_entry["p_number"]
 
+        # Port_well cycles 1-8; after 8, chip number increments
         port_wells = []
         for x in range(rxn_number):
-            port_well = existing_total + x + 1
+            absolute_idx = existing_total + x  # 0-indexed reaction count
+            p_number = base_p_number + (absolute_idx // 8)
+            port_well = (absolute_idx % 8) + 1  # 1-8
             port_wells.append((p_number, port_well))
 
         date_entry["total_reactions"] = existing_total + rxn_number
+        # Ensure next_counter stays ahead of the highest chip we just used
+        highest_chip_used = base_p_number + ((existing_total + rxn_number - 1) // 8)
+        state["next_counter"] = max(state.get("next_counter", 90), highest_chip_used + 1)
         # ==========================================
 
         atac_indices_raw = form_data.get('atac_indices', '')
@@ -616,6 +676,8 @@ class DataLogger:
 
         # ==========================================
         # UPDATED LOGIC FOR COLUMN V (cDNA counter)
+        # Uses _next_amp_name to reconcile with sheet
+        # so counters survive server restarts.
         # ==========================================
         if modality == "RNA":
             cdna_amp_date = self.convert_date(form_data.get('cdna_amp_date', ''))
@@ -623,16 +685,29 @@ class DataLogger:
                 cdna_amp_date = current_date  # Fallback if empty
 
             amp_date_key = f"amp_{cdna_amp_date}"
+            amp_prefix = "APLCXR"
 
+            # --- Reconcile amp_counter with sheet data ---
             if amp_date_key not in state["amp_counter"]:
-                state["amp_counter"][amp_date_key] = 0
+                # State doesn't know about this amp date — check the sheet
+                next_name = self._next_amp_name(worksheet, amp_prefix, cdna_amp_date)
+                # Parse the next_name to figure out what counter value it implies
+                m = re.match(rf'^{re.escape(amp_prefix)}_{re.escape(cdna_amp_date)}_(\d+)_([A-H])$', next_name)
+                if m:
+                    batch = int(m.group(1))
+                    letter = m.group(2)
+                    # Convert batch+letter back to a reaction_count
+                    letter_idx = ord(letter) - 65  # A=0, B=1, ...
+                    state["amp_counter"][amp_date_key] = (batch - 1) * 8 + letter_idx
+                else:
+                    state["amp_counter"][amp_date_key] = 0
 
             reaction_count = state["amp_counter"][amp_date_key]
 
             letter = chr(65 + (reaction_count % 8))  # A through H
             batch_num_for_amp = (reaction_count // 8) + 1  # 1, then 2, then 3...
 
-            row_data[21] = f"APLCXR_{cdna_amp_date}_{batch_num_for_amp}_{letter}"
+            row_data[21] = f"{amp_prefix}_{cdna_amp_date}_{batch_num_for_amp}_{letter}"
 
             state["amp_counter"][amp_date_key] += 1
         # ==========================================
