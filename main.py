@@ -415,7 +415,7 @@ class DataLogger:
                 if s.isdigit(): s = s.zfill(2)
             processed_slabs.append(s)
 
-        # For tissue_name: offset slabs joined with underscores (e.g. 93_94_95)
+        # For tissue_name: offset slabs joined with underscores (e.g., 93_94_95)
         slab_for_tissue = "_".join(processed_slabs)
         # For krienen_lab_identifier: original slab numbers without hemisphere offset
         slab_for_id = "_".join(raw_slabs)
