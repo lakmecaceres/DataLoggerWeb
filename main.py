@@ -396,6 +396,9 @@ class DataLogger:
 
         # Split comma-separated slabs and process each one
         slab_parts = [s.strip() for s in slab_raw.split(',') if s.strip()]
+        # Raw slabs (zero-padded only, no hemisphere offset) for krienen_lab_identifier
+        raw_slabs = [s.zfill(2) if s.isdigit() else s for s in slab_parts]
+        # Offset slabs (with hemisphere adjustment) for tissue_name
         processed_slabs = []
         for s in slab_parts:
             if hemisphere == "RIGHT":
@@ -412,9 +415,11 @@ class DataLogger:
                 if s.isdigit(): s = s.zfill(2)
             processed_slabs.append(s)
 
-        # For tissue_name: join multiple slabs with underscores (e.g. 07_08_09_10)
+        # For tissue_name: offset slabs joined with underscores (e.g. 93_94_95)
         slab_for_tissue = "_".join(processed_slabs)
-        # For krienen_lab_identifier: keep using the first slab only
+        # For krienen_lab_identifier: original slab numbers without hemisphere offset
+        slab_for_id = "_".join(raw_slabs)
+        # Keep slab as offset version for backward compat with other uses
         slab = processed_slabs[0] if processed_slabs else slab_raw
 
         tile_value = form_data.get('tile', '').strip()
@@ -551,7 +556,8 @@ class DataLogger:
                 self.write_modality_data(
                     worksheet, current_row, modality, x, current_date, mit_name, slab_for_tissue, tile, sort_method,
                     port_well, barcoded_cell_sample_name, form_data, tissue_name, rna_indices,
-                    atac_indices, headers, dup_index_counter, donor_name, study, state
+                    atac_indices, headers, dup_index_counter, donor_name, study, state,
+                    slab_for_id=slab_for_id
                 )
                 current_row += 1
 
@@ -561,10 +567,12 @@ class DataLogger:
 
     def write_modality_data(self, worksheet, current_row, modality, x, current_date, mit_name, slab, tile, sort_method,
                             port_well, barcoded_cell_sample_name, form_data, tissue_name_base, rna_indices,
-                            atac_indices, headers, dup_index_counter, donor_name, project, state):
+                            atac_indices, headers, dup_index_counter, donor_name, project, state,
+                            slab_for_id=None):
 
-        # slab may be underscore-joined for multi-slab (e.g. "07_08_09_10")
-        slab_part = f"Slab{slab}"
+        # slab_for_id = original slab numbers (no hemisphere offset) for krienen_lab_identifier
+        # slab = offset slab numbers for tissue_name
+        slab_part = f"Slab{slab_for_id or slab}"
         tile_part = f"Tile{int(tile)}" if str(tile).isdigit() else tile
 
         krienen_lab_identifier = f"{current_date}_HMBA_{mit_name}_{slab_part}_{tile_part}_{sort_method}_{modality}{x + 1}"
